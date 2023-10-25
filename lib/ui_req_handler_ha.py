@@ -908,7 +908,7 @@ def repair(req):
             return 200, ''
 
     # 先检测是否可以修复,如果不能,直接返回
-    ret_code, msg = ha_mgr.can_be_failback(cluster_id, db_id, up_db_id)
+    ret_code, msg = ha_mgr.can_be_failback(cluster_id, db_id)
     if ret_code != 0:
         return 400, msg
 

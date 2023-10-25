@@ -296,7 +296,7 @@ update clup_init_db_conf set val='10' where setting_name = 'autovacuum_max_worke
 update clup_init_db_conf set val='320', unit='MB' where setting_name = 'min_wal_size';
 update clup_init_db_conf set val='0' where setting_name = 'statement_timeout';
 update clup_init_db_conf set val='8192', unit = 'B', setting_type=3 where setting_name = 'track_activity_query_size';
-update clup_init_db_conf set val='pg_stat_statements,pg_store_plans' where setting_name = 'shared_preload_libraries';
+update clup_init_db_conf set val='pg_stat_statements' where setting_name = 'shared_preload_libraries';
 
 -- 原先的第5类是一个有值范围的拖拽的条，现在去掉，把其中唯一的一个参数shared_buffer改成第3类
 update clup_init_db_conf set setting_type=3 where setting_name='shared_buffers';
