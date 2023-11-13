@@ -26,7 +26,7 @@ var g_memu_list = {
 			"menuShow": true,
 			"iconCls": "el-icon-coin",
 			"children": [
-				{ "path": "/dbLists", "iconCls": "el-icon-s-data", "component": "dbLists", "name": "数据库列表", "menuShow": true },
+				{ "path": "/dbLists", "iconCls": "el-icon-s-data", "component": "dbLists", "name": "实例列表", "menuShow": true },
 				{ "path": "/SessionManage", "iconCls": "el-icon-chat-dot-square", "component": "SessionManage", "name": "会话管理", "menuShow": true },
 				{ "path": "/lockManage", "iconCls": "el-icon-lock", "component": "lockManage", "name": "锁管理", "menuShow": true },
 				{ "path": "/dbLogView?logtype=1", "iconCls": "el-icon-tickets", "component": "dbLogView", "name": "日志查看", "menuShow": true }
