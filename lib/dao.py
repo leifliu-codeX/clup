@@ -156,9 +156,6 @@ def get_all_cluster():
         ret_rows = []
         for row in rows:
             cluster_dict = row['cluster_data']
-            if 'cstlb_list' in cluster_dict:
-                cluster_dict['cstlb_list'] = cluster_dict['cstlb_list'].split(',')
-
             ret_row = {'cluster_id': row['cluster_id'],
                        'cluster_type': row['cluster_type'],
                        'state': row['state'],
@@ -167,9 +164,7 @@ def get_all_cluster():
             ret_row.update(cluster_dict)
             ret_rows.append(ret_row)
 
-        # sql = (
-        #     "SELECT db_id, cluster_id, state, pgdata, is_primary, repl_app_name, "
-        #     "host, repl_ip FROM clup_db")
+
         sql = """
         SELECT db_id,cluster_id,state pgdata, is_primary, repl_app_name, host, repl_ip FROM clup_db INNER JOIN
         (SELECT cluster_id, cluster_type FROM clup_cluster) as cluster
@@ -205,44 +200,6 @@ def get_cluster_db_ip_list(cluster_id):
         (cluster_id,))
     cluster_db_host_list = [row['host'] for row in rows]
     return cluster_db_host_list
-
-
-def add_cluster(cluster_dict):
-    """
-    :param cluster_dict:
-    :return: 返回cluster_id
-    """
-
-    cluster_type = cluster_dict['cluster_type']
-    if 'db_list' in cluster_dict:
-        db_list = cluster_dict.pop('db_list')
-    else:
-        db_list = []
-
-    col_list = ['cluster_type', 'state', 'lock_time']
-    cluster_row = {}
-    for col_name in col_list:
-        cluster_row[col_name] = cluster_dict.pop(col_name)
-    cluster_data = json.dumps(cluster_dict)
-
-    with dbapi.DBProcess() as dbp:
-        rows = dbp.query(
-            "INSERT INTO clup_cluster(cluster_type ,cluster_data, state, lock_time)"
-            " VALUES(%s,%s,%s,%s) RETURNING cluster_id",
-            (cluster_row['cluster_type'], cluster_data,
-             cluster_row['state'], cluster_row['lock_time'])
-        )
-        cluster_id = rows[0]['cluster_id']
-
-        if cluster_type == 1:
-            for i in db_list:
-                dbp.execute(
-                    "INSERT INTO clup_db(cluster_id, state, pgdata, "
-                    "is_primary, repl_app_name, host, repl_ip) "
-                    "values(%s,%s,%s,%s,%s,%s,%s)",
-                    (cluster_id, i['state'], i['pgdata'], i['is_primary'],
-                     i['repl_app_name'], i['host'], i['repl_ip']))
-        return cluster_id
 
 
 def set_cluster_state(cluster_id, state):
@@ -567,14 +524,8 @@ def get_cluster_db_host_list(cluster_id):
     return rows
 
 
-def set_new_read_vip_host(cluster_id, host):
-    sql = f"""UPDATE clup_cluster SET cluster_data=jsonb_set(cluster_data, '{{read_vip_host}}', '"{host}"') WHERE cluster_id = {cluster_id}"""
-    dbapi.execute(sql)
-
-
 def get_cluster_vip(cluster_id):
-    sql = "SELECT cluster_data->'read_vip' AS read_vip, cluster_data->'vip' as vip, " \
-          "cluster_data->'read_vip_host' AS read_vip_host FROM clup_cluster WHERE cluster_id =%s"
+    sql = "SELECT cluster_data->'vip' as vip FROM clup_cluster WHERE cluster_id =%s"
     rows = dbapi.query(sql, (cluster_id, ))
     return rows[0]
 

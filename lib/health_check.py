@@ -39,7 +39,6 @@ import db_encrypt
 import ha_logic
 import ha_mgr
 import helpers
-import lb_mgr
 import node_state
 import pg_db_lib
 import pg_helpers
@@ -49,62 +48,6 @@ import rpc_utils
 ASYNC_CLUSTER_LIST = []
 SYNC_CLUSTER_LIST = []
 FAILBACK_DB_LIST = []
-
-
-def sr_switch_read_vip(read_vip_host, read_vip, cluster_id):
-    rows = dao.get_cluster_db_host_list(cluster_id)
-    host_list = [row['host'] for row in rows if row['is_primary'] == 0]
-    primary_host_list = [row['host'] for row in rows if row['is_primary'] == 1]
-    # 删除掉当前不能连接的host
-    # 将主库ip放到最后，如果所有备库都连接不上，就放到主库上
-    host_list.extend(primary_host_list)
-    if read_vip_host in host_list:
-        host_list.remove(read_vip_host)
-    for host in host_list:
-        err_code, err_msg = rpc_utils.get_rpc_connect(host)
-        if err_code != 0:
-            continue
-        rpc = err_msg
-        try:
-            logging.info(f'check and add vip({read_vip}) to host({host})')
-            err_code, err_msg = rpc.check_and_add_vip(read_vip)
-            if err_code < 0:
-                logging.error(f"Cluster({cluster_id}): Can not check and add read vip({read_vip}) in host({read_vip_host}): {err_msg}")
-        finally:
-            rpc.close()
-
-        # 更新数据库中read_vip_host
-        dao.set_new_read_vip_host(cluster_id, host)
-        return 0
-
-    # 如果都连接不上就返回-1
-    return -1
-
-
-def sr_check_del_read_vip(cluster_id):
-    vip = dao.get_cluster_vip(cluster_id)
-    if not vip['read_vip']:
-        return
-    rows = dao.get_cluster_db_host_list(cluster_id)
-    host_list = [row['host'] for row in rows]
-    if vip['read_vip_host'] in host_list:
-        host_list.remove(vip['read_vip_host'])
-    read_vip = vip['read_vip']
-    for host in host_list:
-        err_code, err_msg = rpc_utils.get_rpc_connect(host)
-        if err_code != 0:
-            continue
-        rpc = err_msg
-        try:
-            err_code, ret = rpc.vip_exists(read_vip)
-            if err_code != 0 or not ret:
-                # 如果连接失败，直接跳过
-                continue
-            # 如果存在，则删除
-            logging.info(f'remove read vip({read_vip}) from host ({host})')
-            rpc_utils.check_and_del_vip(host, read_vip)
-        finally:
-            rpc.close()
 
 
 def sr_check_del_write_vip(cluster_id):
@@ -207,8 +150,6 @@ def sr_check_async_to_sync(cluster_id):
 def sr_ha_check_vip(cluster_dict, clu_db_list):
     cluster_id = cluster_dict['cluster_id']
     vip = cluster_dict['vip'].strip()
-    read_vip = cluster_dict['read_vip'].strip()
-    read_vip_host = cluster_dict['read_vip_host'].strip()
 
     # 检查vip
     for db_dict in clu_db_list:
@@ -230,78 +171,6 @@ def sr_ha_check_vip(cluster_dict, clu_db_list):
                     continue
             finally:
                 rpc.close()
-
-    if read_vip:  # 如果设置了读vip，则进行检查
-        err_code, err_msg = rpc_utils.get_rpc_connect(read_vip_host)
-        if err_code != 0:
-            logging.error(f"Cluster({cluster_id}): Can not check and add read vip({read_vip}) in host({read_vip_host}): maybe host is down.")
-            logging.info(f"Cluster({cluster_id}): read vip({read_vip}) needs to be switched to other host({read_vip_host})")
-            err = sr_switch_read_vip(read_vip_host, read_vip, cluster_id)
-            if err != 0:
-                logging.error(f"Cluster({cluster_id}): All the databases are broken.")
-        rpc = err_msg
-        try:
-            err_code, ret = rpc.vip_exists(read_vip)
-            if err_code != 0 or ret:
-                # 如果连接失败或者存在read vip，直接返回
-                return
-
-            logging.info(f"Cluster({cluster_id}): read vip({read_vip}) needs to be added on host({read_vip_host})")
-            err_code, err_msg = rpc.check_and_add_vip(read_vip)
-            if err_code < 0:
-                logging.error(f"Cluster({cluster_id}): Can not check and add read vip({read_vip}) in host({read_vip_host}): {err_msg}")
-        finally:
-            rpc.close()
-
-
-def sr_ha_check_cstlb(cluster_dict, clu_db_list):
-    cluster_id = cluster_dict['cluster_id']
-    db_port = cluster_dict['port']
-    str_cstlb_list = cluster_dict['cstlb_list']
-    if not str_cstlb_list:
-        return
-    cstlb_list = str_cstlb_list.split(',')
-    if len(cstlb_list) <= 0:
-        return
-
-    res_clupstb = []
-    for db in clu_db_list:
-        if db['is_primary'] != 1 and db['state'] == node_state.NORMAL:
-            ip_port = db['host'] + ':' + str(db_port)
-            res_clupstb.append(ip_port)
-    token = config.get("cstlb_token")
-    for lb_addr in cstlb_list:
-        try:
-            response = urllib.request.urlopen('http://' + lb_addr + '/backend/list?token=' + token)
-        except ConnectionRefusedError as e:
-            logging.error(f"Cluster({cluster_id}): Unable to connect to the load balancer: {lb_addr}: \n {str(e)}")
-            continue
-        except urllib.error.URLError as e:
-            logging.error(f"Cluster({cluster_id}): Unable to connect to the load balancer: {lb_addr}: \n {str(e)}")
-            continue
-        except Exception:
-            logging.error(f"Cluster({cluster_id}): Unexpected error occurred during check csltb: {traceback.format_exc()}")
-            continue
-
-        res_cstlbstb = json.loads(response.read()).keys()
-        diff = list(set(res_cstlbstb) ^ set(res_clupstb))
-        if len(diff) == 0:
-            continue
-
-        cstlb_del = [x for x in diff if x not in res_clupstb]
-        cstlb_add = [x for x in diff if x not in res_cstlbstb]
-
-        logging.info(f'need delete {cstlb_del} from {lb_addr}')
-        for backend_addr in cstlb_del:
-            status, data = lb_mgr.delete_backend(lb_addr, backend_addr)
-            if status != 0:
-                logging.error(data)
-
-        logging.info(f'need add {cstlb_add} to {lb_addr}')
-        for backend_addr in cstlb_add:
-            status, data = lb_mgr.add_backend(lb_addr, backend_addr)
-            if status != 0:
-                logging.error(data)
 
 
 def probe_postgres_db(cluster_id, host, db_port, db_name, db_user, db_pass, sql, timeout, retry_interval, retry_cnt):
@@ -435,11 +304,7 @@ class SrHaChecker(threading.Thread):
                     sr_ha_check_vip(cluster_dict, clu_db_list)
                 except Exception:
                     logging.error(f"Cluster({self.cluster_id}): Unexpected error occurred during check vip: {traceback.format_exc()}")
-                # 检查并删除重复只读vip
-                try:
-                    sr_check_del_read_vip(self.cluster_id)
-                except Exception:
-                    logging.error(f"Cluster({self.cluster_id}): Unexpected error occurred during check and del vip: {traceback.format_exc()}")
+
                 # 检查并删除重复写vip
                 try:
                     sr_check_del_write_vip(self.cluster_id)
@@ -453,12 +318,6 @@ class SrHaChecker(threading.Thread):
                     sr_check_async_to_sync(self.cluster_id)
                 except Exception:
                     logging.error(f"Cluster({self.cluster_id}): Unexpected error occurred during check and del vip: {traceback.format_exc()}")
-
-                # 检查负载均衡
-                try:
-                    sr_ha_check_cstlb(cluster_dict, clu_db_list)
-                except Exception:
-                    logging.error(f"Cluster({self.cluster_id}): Unexpected error occurred during check cstlb: {traceback.format_exc()}")
 
             except Exception:
                 err_msg = traceback.format_exc()
@@ -582,8 +441,6 @@ class ClusterChangeChecker(threading.Thread):
 
 
 def start_check():
-    # host_checker = HostChecker()
-    # host_checker.start()
     # 启动一个检查是否有新增ha cluster的线程，如果发现有一个新的ha cluster，就启动一个新的线程服务这个ha cluster
     logging.info("Start new ha cluster checker thread...")
     cluster_changer_checker = ClusterChangeChecker()

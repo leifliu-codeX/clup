@@ -1223,7 +1223,13 @@ def get_pg_setting_list(db_id, fill_up_default=False, setting_name=None):
                 # 有些参数在clup_init_db_conf中可能没有,那就在pg_settings中查
                 sql = f"SELECT name, setting, unit, vartype FROM pg_settings WHERE name = '{setting_name}'"
                 # 暂时先按照csumdb(PG12)的版本为准,理论上应该查询指定的数据库
-                result = dbapi.query(sql)
+                # result = dbapi.query(sql)
+
+                # 改为查询当前库，连接目标库查询设置
+                db_dict = dao.get_db_conn_info(db_id)
+                conn = dao.get_db_conn(db_dict)
+                result = dao.sql_query(conn, sql)
+                setting_type_dict = dict()
                 if result:
                     setting_type_dict = {
                         "bool": 2,
@@ -1343,6 +1349,7 @@ def get_pg_setting_list(db_id, fill_up_default=False, setting_name=None):
                 else:
                     res = re.findall(r'(-{0,1}\d+)(\D+)', value)  # 128MB  -> [(128, 'MB')]
                     if not res:
+                        setting_list.append(conf)
                         continue
                     conf['unit'] = res[0][1]
                     conf['val'] = res[0][0]
@@ -1364,7 +1371,8 @@ def get_pg_setting_list(db_id, fill_up_default=False, setting_name=None):
             else:
                 conf['is_in_auto_conf'] = 0
             setting_list.append(conf)
-
+        if not setting_list:
+            return -1, "Get the settings conf failed."
         return 0, setting_list
     except Exception:
         return -1, traceback.format_exc()
@@ -1391,12 +1399,11 @@ def get_db_room(db_id):
     cluster_data = rows[0]['cluster_data']
     room_info = cluster_data.get('rooms', {})
     if not room_info or (room_id == '0' and not room_info.get(str(room_id))):
-        room = {"room_name": "默认机房",
-                "vip": cluster_data['vip'],
-                "read_vip": cluster_data.get('read_vip', ''),
-                "cstlb_list": cluster_data.get('cstlb_list', ''),
-                "room_id": room_id
-                }
+        room = {
+            "room_name": "默认机房",
+            "vip": cluster_data['vip'],
+            "room_id": room_id
+        }
     else:
         room = room_info.get(str(room_id))
         room['room_id'] = room_id
@@ -1445,11 +1452,9 @@ def update_cluster_room_info(cluster_id, db_id=None):
 
     if not room_info:
         room_info = {'0': {
-            'vip': cluster_data['vip'],
-            'read_vip': cluster_data.get('read_vip', ''),
-            'cstlb_list': cluster_data.get('cstlb_list', ''),
-            'room_name': '默认机房',
-        }
+                'vip': cluster_data['vip'],
+                'room_name': '默认机房'
+            }
         }
     primary_room_info = room_info[str(primary_room_id)]
     cluster_data.update(primary_room_info)

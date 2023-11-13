@@ -33,7 +33,6 @@ import dao
 import database_state
 import db_encrypt
 import general_task_mgr
-import lb_mgr
 import node_state
 import pg_db_lib
 import pg_helpers
@@ -204,63 +203,6 @@ def failover_standby_db(task_id, cluster_id, db_id):
     pre_msg = f"Failover standby database({bad_db_dict['host']}:{db_port})"
 
     try:
-        # 如果此备库上有read_vip，需要把read_vip切换到另一台备库上
-        is_have_read_vip = False
-        read_vip_host = cluster_dict['read_vip_host']
-        read_vip = cluster_dict.get('read_vip')
-        str_cstlb_list = cluster_dict['cstlb_list']
-        if not str_cstlb_list:
-            cstlb_list = []
-        else:
-            cstlb_list = str_cstlb_list.split(',')
-            cstlb_list = [k.strip() for k in cstlb_list]
-        # cstlb_ip_list = [ip_port.split(':')[0] for ip_port in cstlb_list]
-        if bad_db_dict['host'] == read_vip_host and read_vip:
-            is_have_read_vip = True
-
-        if is_have_read_vip:  # 如果本节点上存在只读vip，需要找到另一个合适的备库，然后把只读vip切换过去
-            new_pg = None
-            for db_dict in clu_db_list:
-                if db_dict['db_id'] == db_id:
-                    continue
-                if db_dict['state'] == node_state.NORMAL and db_dict['is_primary'] == 0:
-                    # 如果这台机器上有read vip，则需要在cstlb_ip_list中找备库，而不能是任意的备库
-                    # if is_have_read_vip and db_dict['host'] not in cstlb_ip_list:
-                    #     continue
-                    # 找到一个好的备库，准备把read_vip切换到这台机器上
-                    new_pg = db_dict
-                    break
-
-            if not new_pg:
-                msg = f"{pre_msg}: can not find a normal standby database, so switch failed!!!"
-                # 无法把read vip切换到好的机器上，现直接把此备库的状态改为“FAULT”
-                dao.set_cluster_db_state(cluster_id, bad_db_dict['db_id'], node_state.FAULT)
-                task_log_error(task_id, msg)
-                return -1, msg
-            else:
-                task_log_info(task_id, f"{pre_msg}: read vip({read_vip}) switch to host({new_pg['host']}).")
-                dao.set_cluster_db_state(cluster_id, bad_db_dict['db_id'], node_state.FAILOVER)
-
-            if is_have_read_vip:
-                new_host = new_pg['host']
-                task_log_info(task_id, f"{pre_msg}: switch read vip({read_vip}) to host({new_host})...")
-                err_code, err_msg = rpc_utils.check_and_del_vip(read_vip_host, read_vip)
-                if err_code != 0:
-                    task_log_info(task_id, f"{pre_msg}: host({read_vip_host}) maybe is down, can not del vip({read_vip}): {err_msg}")
-
-                rpc_utils.check_and_add_vip(new_host, read_vip)
-                if err_code != 0:
-                    task_log_info(task_id, f"{pre_msg}: host({new_host}) maybe is down, can not add vip({read_vip}): {err_msg}")
-
-        if read_vip:  # 如果集群配置了只读vip，说明有读写分离的负载均衡功能，需要从从负载均衡器cstlb中把坏节点剔除掉
-            backend_addr = f"{bad_db_dict['host']}:{db_port}"
-            task_log_info(task_id, f'{pre_msg}: begin remove bad host({backend_addr}) from cstlb ...')
-            for lb_host in cstlb_list:
-                err_code, msg = lb_mgr.delete_backend(lb_host, backend_addr)
-                if err_code != 0:
-                    task_log_error(task_id, f"Can not remove host({backend_addr}) from load balance({lb_host}): {msg}")
-            task_log_info(task_id, f'{pre_msg}: remove bad host({backend_addr}) from cstlb finished.')
-
         task_log_info(task_id, f"{pre_msg}: save node state to meta server...")
         try:
             dao.set_cluster_db_state(cluster_id, bad_db_dict['db_id'], node_state.FAULT)
@@ -268,7 +210,7 @@ def failover_standby_db(task_id, cluster_id, db_id):
             task_log_info(task_id, f"{pre_msg}: save node state to meta server completed.")
         except Exception as e:
             task_log_error(task_id,
-                    f"{pre_msg}: Unexpected error occurred during save node state to meta server: {repr(e)}")
+                f"{pre_msg}: Unexpected error occurred during save node state to meta server: {repr(e)}")
 
         # 如果配置了切换时调用的数据库函数，则调用此函数
         trigger_db_name = cluster_dict['trigger_db_name']
@@ -328,8 +270,6 @@ def failover_primary_db(task_id, cluster_id, db_id):
     db_port = cluster_dict['port']
 
     vip = cluster_dict['vip']
-    read_vip_host = cluster_dict.get('read_vip_host', '')
-    read_vip = cluster_dict.get('read_vip', '')
     bad_db_dict = None
     # 先找到主库，把主库上的write vip先删除掉，如果主库的机器出问题了，连接不上去，则不管了
     # FIXME: 目前是去不掉原先的旧主库上的vip，就不管了，存在IP地址冲突的风险，后续可能需要用IPMI等手段强制把旧主库的主机关掉
@@ -391,7 +331,6 @@ def failover_primary_db(task_id, cluster_id, db_id):
     new_pri_lsn = 0
     new_pri_pg = None
     new_pri_scores = 0
-    new_read_vip_host = ''
     max_lsn = 0
     max_lsn_pg = None
     # 先根据scores排序，scores值越大，优先级越低
@@ -465,35 +404,6 @@ def failover_primary_db(task_id, cluster_id, db_id):
             task_log_info(task_id, f"{pre_msg}: reload db in host({host}) failed")
         task_log_info(task_id, f"{pre_msg}: reset wal_retrieve_retry_interval in new_pri_host({host}) success")
 
-    # 做为新主库的备库上原先如果有只读vip，尽量把其移动到其他备库上
-    if read_vip and read_vip_host == new_pri_pg['host']:
-        # 找一个放只读vip的候选备库
-        new_read_vip_host = None
-        if read_vip_host:
-            for p in all_good_stb_db:
-                if p['host'] != new_pri_pg['host']:
-                    new_read_vip_host = p['host']
-
-        if new_read_vip_host:
-            # 如果新的主库上面有之前的只读VIP，需要将只读VIP切换到其他备库上，
-            task_log_info(task_id, f"need delete read vip {read_vip} from {read_vip_host}")
-
-            try:
-                rpc_utils.check_and_del_vip(read_vip_host, read_vip)
-                task_log_info(task_id, f"{pre_msg}: delete read vip({read_vip}) completed.")
-            except OSError:
-                task_log_info(task_id, f"{pre_msg}: host({read_vip_host}) maybe is down, can not delete read vip({read_vip})")
-            task_log_info(task_id, f"need add read vip {read_vip} to {new_read_vip_host}")
-            try:
-                rpc_utils.check_and_add_vip(new_read_vip_host, read_vip)
-                task_log_info(task_id, f'{pre_msg}: add read vip({read_vip}) to other standby ({new_read_vip_host}) completed.')
-            except Exception:
-                task_log_error(task_id, f"{pre_msg} : unexpected error occurred during add read vip ({read_vip}) "
-                    f"to other standby({new_read_vip_host}): {traceback.format_exc()}")
-            dao.set_new_read_vip_host(cluster_id, new_read_vip_host)
-        else:
-            task_log_info(task_id, f"{pre_msg}: no other standby, so read vip {read_vip} still keep in new primary host({new_pri_pg['host']}).")
-
     # 保存修改
     try:
         bad_db_dict['is_primary'] = 0
@@ -511,21 +421,6 @@ def failover_primary_db(task_id, cluster_id, db_id):
     finally:
         bad_db_dict['state'] = node_state.FAULT
         dao.set_cluster_db_state(cluster_id, db_id, node_state.FAULT)
-
-    # 因为选中的备库会变成主库，所以需要从负载均衡器cstlb中把节点剔除掉
-    task_log_info(task_id, f"{pre_msg}: begin remove new primary database({new_pri_pg['host']}) from cstlb ...")
-    str_cstlb_list = cluster_dict['cstlb_list']
-    if not str_cstlb_list:
-        cstlb_list = []
-    else:
-        cstlb_list = str_cstlb_list.split(',')
-        cstlb_list = [k.strip() for k in cstlb_list]
-    for lb_host in cstlb_list:
-        backend_addr = f"{new_pri_pg['host']}:{db_port}"
-        err_code, msg = lb_mgr.delete_backend(lb_host, backend_addr)
-        if err_code != 0:
-            task_log_error(task_id, f"Can not remove host({backend_addr}) from cstlb({lb_host}): {msg}")
-    task_log_info(task_id, f"{pre_msg}: remove new primary database({bad_db_dict['host']}) from cstlb finished.")
 
     try:
         if not cluster_dict.get('failover_keep_cascaded', False):  # 如果不保留级联关系，则把需要把其它备库都指向新的主库
@@ -636,8 +531,6 @@ def failover_polar_primary_db(task_id, cluster_id, db_id):
     db_port = cluster_dict['port']
 
     vip = cluster_dict['vip']
-    read_vip_host = cluster_dict.get('read_vip_host', '')
-    read_vip = cluster_dict.get('read_vip', '')
     bad_db_dict = None
     # 先找到主库，把主库上的write vip先删除掉，如果主库的机器出问题了，连接不上去，则不管了
     # FIXME: 目前是去不掉原先的旧主库上的vip，就不管了，存在IP地址冲突的风险，后续可能需要用IPMI等手段强制把旧主库的主机关掉
@@ -681,7 +574,6 @@ def failover_polar_primary_db(task_id, cluster_id, db_id):
 
     # polarDB 共享存储集群无需判断LSN
     new_pri_pg = None
-    new_read_vip_host = ''
     # 先根据scores排序
     all_good_stb_db.sort(key=lambda x: x['scores'], reverse=False)
     for p in all_good_stb_db:
@@ -694,10 +586,6 @@ def failover_polar_primary_db(task_id, cluster_id, db_id):
         if not new_pri_pg:
             new_pri_pg = p
 
-        if not new_read_vip_host and read_vip_host:
-            # 配了只读VIP，需要将只读VIP切换到其他备库上，只有一个主库正常的时候就不管了，两个VIP都放在主库上
-            new_read_vip_host = p['host']
-
     if not new_pri_pg:
         bad_db_dict['state'] = node_state.FAULT
         dao.set_cluster_db_state(cluster_id, db_id, node_state.FAULT)
@@ -706,24 +594,6 @@ def failover_polar_primary_db(task_id, cluster_id, db_id):
         return -1, msg
     else:
         task_log_info(task_id, f"{pre_msg}: switch to new host({new_pri_pg['host']})...")
-
-    if new_read_vip_host and read_vip and read_vip_host == new_pri_pg['host']:
-        # 如果新的主库上面有之前的只读VIP，需要将只读VIP切换到其他备库上，
-        task_log_info(task_id, f"need delete read vip {read_vip} from {read_vip_host}")
-
-        try:
-            rpc_utils.check_and_del_vip(read_vip_host, read_vip)
-            task_log_info(task_id, f"{pre_msg}: delete read vip({read_vip}) completed.")
-        except OSError:
-            task_log_info(task_id, f"{pre_msg}: host({read_vip_host}) maybe is down, can not delete read vip({read_vip})")
-        task_log_info(task_id, f"need add read vip {read_vip} to {new_read_vip_host}")
-        try:
-            rpc_utils.check_and_add_vip(new_read_vip_host, read_vip)
-            task_log_info(task_id, f'{pre_msg}: add read vip({read_vip}) to other standby ({new_read_vip_host}) completed.')
-        except Exception:
-            task_log_error(task_id, f"{pre_msg} : unexpected error occurred during add read vip ({read_vip}) "
-                               "to other standby({new_read_vip_host}): {traceback.format_exc()}")
-        dao.set_new_read_vip_host(cluster_id, new_read_vip_host)
 
     # 提升reader节点为主库前需要在主库机器执行reset命令，确保共享磁盘pfs文件系统安全
     is_failed = False

@@ -26,6 +26,7 @@ import copy
 import json
 import logging
 import os
+import time
 import traceback
 
 import cluster_state
@@ -192,7 +193,6 @@ def get_cluster_db_list(req):
     for db_dict in rows:
         if 'repl_ip' not in db_dict:
             db_dict['repl_ip'] = ''
-    cluster_type = dao.get_cluster_type(cluster_id)
 
     # 增加返回hid
     host_data = dbapi.query('select hid, ip from clup_host ', ())
@@ -441,9 +441,7 @@ def modify_sr_cluster_info(req):
         'cluster_id': csu_http.MANDATORY | csu_http.INT,
         'cluster_name': 0,
         'vip': 0,
-        'read_vip': 0,
         'port': csu_http.INT,
-        'cstlb_list': 0,
         'db_switch_func': 0,
         'remark': 0,
         'trigger_db_name': 0,
@@ -462,7 +460,6 @@ def modify_sr_cluster_info(req):
         'auto_failover': 0,
         'failover_keep_cascaded': 0,
         'probe_stb_sql': 0,
-        'read_vip_host': 0,
         'save_old_room_vip': 0,
     }
 
@@ -519,17 +516,6 @@ def modify_sr_cluster_info(req):
 
         cluster_dict = rows[0]['cluster_data']
 
-        # 如果修改了cstlb_list,同时原先的read_vip_host为空,则把read_vip_host设置为cstlb_list中的第一个IP
-        read_vip_host = ''
-        if 'read_vip_host' in cluster_dict:
-            read_vip_host = pdict.get('read_vip_host', '')
-
-        if 'cstlb_list' in pdict:
-            cstlb_list = pdict['cstlb_list'].split(',')
-            cstlb_list = [k.strip() for k in cstlb_list]
-            if len(cstlb_list) > 0 and read_vip_host == '':
-                cluster_dict['read_vip_host'] = cstlb_list[-1].split(':')[0]
-
         rooms = cluster_dict.get('rooms', {})
         cluster_dict.update(attr_dict)
         cur_room_info = pg_helpers.get_current_cluster_room(cluster_id)
@@ -540,9 +526,7 @@ def modify_sr_cluster_info(req):
             room_id = cur_room_info.pop('room_id', '0')
             rooms[str(room_id)] = {
                 'room_name': cur_room_info.get('room_name', '默认机房'),
-                'vip': cluster_dict['vip'],
-                'cstlb_list': cluster_dict.get('cstlb_list', ''),
-                'read_vip': cluster_dict.get('read_vip', ''),
+                'vip': cluster_dict['vip']
             }
             cluster_dict['rooms'] = rooms
 
@@ -607,9 +591,7 @@ def get_sr_cluster_room_info(req):
     default_room = {
         'vip': cluster_data['vip'],
         'room_name': '默认机房',
-        'read_vip': cluster_data['read_vip'],
-        'room_use_state': 0,
-        'cstlb_list': cluster_data['cstlb_list'],
+        'room_use_state': 0
     }
     room_info = {'0': default_room} if not room_info else room_info
     cluster_db_list = dao.get_cluster_db_list(cluster_id)
@@ -1123,16 +1105,13 @@ def get_all_instance(req):
 
 
 def create_sr_cluster(req):
+    """创建PostgreSQL流复制集群
+
+    """
     params = {
         'cluster_name': csu_http.MANDATORY,
         'vip': csu_http.MANDATORY,
-        'read_vip': 0,
-        'cstlb_list': 0,
         'port': csu_http.MANDATORY,
-        # 'os_user': csu_http.MANDATORY,  # 操作系统用户名
-        # 'os_uid': csu_http.MANDATORY | csu_http.INT,  # 操作系统用户uid
-        # 'pg_bin_path': csu_http.MANDATORY,  # 数据库软件路径
-        # 'version': csu_http.MANDATORY,  # 数据库软件的版本
         'db_user': csu_http.MANDATORY,
         'db_pass': csu_http.MANDATORY,
         'repl_user': csu_http.MANDATORY,
@@ -1148,9 +1127,7 @@ def create_sr_cluster(req):
         'probe_retry_interval': csu_http.MANDATORY | csu_http.INT,
         'probe_pri_sql': csu_http.MANDATORY,
         'probe_stb_sql': csu_http.MANDATORY,
-        'setting_list': csu_http.MANDATORY,
-        # [{'conf': ‘shared_buffer’, 'val': '128', 'unit': 'MB'}, {'conf': ‘max_connections', 'val': '128'}...]
-
+        'setting_list': csu_http.MANDATORY
     }
     err_code, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
@@ -1198,14 +1175,6 @@ def create_sr_cluster(req):
     # 定义cluster_data
     cluster_data = pdict.copy()
     del cluster_data['db_list']
-    if 'cstlb_list' not in pdict:
-        cluster_data['cstlb_list'] = ''
-        cluster_data['read_vip_host'] = ''
-    else:
-        cstlb_list = pdict['cstlb_list'].split(',')
-        cluster_data['read_vip_host'] = cstlb_list[-1].split(':')[0]
-
-    cluster_data['read_vip'] = pdict.get('read_vip', '')
 
     # 操作记录信息
     db_info = {
@@ -1535,8 +1504,6 @@ def create_polar_sd_cluster(req):
     params = {
         'cluster_name': csu_http.MANDATORY,
         'vip': csu_http.MANDATORY,
-        'read_vip': 0,
-        'cstlb_list': 0,
         'port': csu_http.MANDATORY,
         'db_user': csu_http.MANDATORY,
         'db_pass': csu_http.MANDATORY,
@@ -1579,14 +1546,7 @@ def create_polar_sd_cluster(req):
     cluster_data = pdict.copy()
     del cluster_data['db_list']
     del cluster_data['reset_cmd']
-    if 'cstlb_list' not in pdict:
-        cluster_data['cstlb_list'] = ''
-        cluster_data['read_vip_host'] = ''
-    elif len(pdict['cstlb_list']):
-        cstlb_list = pdict['cstlb_list'].split(',')
-        cluster_data['read_vip_host'] = cstlb_list[-1].split(':')[0]
     cluster_data['ignore_reset_cmd_return_code'] = pdict.get('ignore_reset_cmd_return_code', 0)
-    cluster_data['read_vip'] = pdict.get('read_vip', '')
     cluster_data['polar_hostid'] = len(pdict['db_list']) + 1
 
     # 检查数据库信息是否已经存在
@@ -1630,7 +1590,6 @@ def modify_polar_cluster_info(req):
         'cluster_id': csu_http.MANDATORY | csu_http.INT,
         'cluster_name': 0,
         'vip': 0,
-        'read_vip': 0,
         'port': csu_http.INT,
         'db_switch_func': 0,
         'remark': 0,
@@ -1648,7 +1607,6 @@ def modify_polar_cluster_info(req):
         'probe_pri_sql': 0,
         'auto_failback': 0,
         'probe_stb_sql': 0,
-        'read_vip_host': 0,
         'save_old_room_vip': 0,
         'polar_hostid': csu_http.MANDATORY,
         'pfs_disk_name': csu_http.MANDATORY,
@@ -1694,16 +1652,6 @@ def modify_polar_cluster_info(req):
             return 400, f"cluster_id({pdict['cluster_id']}) not exists!"
 
         cluster_dict = rows[0]['cluster_data']
-        # 如果修改了cstlb_list,同时原先的read_vip_host为空,则把read_vip_host设置为cstlb_list中的第一个IP
-        read_vip_host = ''
-        if 'read_vip_host' in cluster_dict:
-            read_vip_host = pdict.get('read_vip_host', '')
-
-        if 'cstlb_list' in pdict:
-            cstlb_list = pdict['cstlb_list'].split(',')
-            cstlb_list = [k.strip() for k in cstlb_list]
-            if len(cstlb_list) > 0 and read_vip_host == '':
-                cluster_dict['read_vip_host'] = cstlb_list[-1].split(':')[0]
 
         rooms = cluster_dict.get('rooms', {})
         cluster_dict.update(attr_dict)
@@ -1715,9 +1663,7 @@ def modify_polar_cluster_info(req):
             room_id = cur_room_info.pop('room_id', '0')
             rooms[str(room_id)] = {
                 'room_name': cur_room_info.get('room_name', '默认机房'),
-                'vip': cluster_dict['vip'],
-                'cstlb_list': cluster_dict.get('cstlb_list', ''),
-                'read_vip': cluster_dict.get('read_vip', ''),
+                'vip': cluster_dict['vip']
             }
             cluster_dict['rooms'] = rooms
 
@@ -1728,8 +1674,10 @@ def modify_polar_cluster_info(req):
     return 200, 'ok'
 
 
-# polardb 共享存储主备切换
 def polar_switch(req):
+    """polardb 共享存储主备切换
+
+    """
     params = {
         'cluster_id': csu_http.MANDATORY | csu_http.INT,
         'db_id': 0,
@@ -1877,3 +1825,119 @@ def format_pfs_disk(req):
         return 400, f'Format pfs disk in host({master_host}) failed: {str(stderr)}'
     else:
         return 200, f'Format pfs disk {pfs_disk_name} sucess.'
+
+
+def batch_online_cluster(req):
+    """批量上线集群
+
+    Args:
+        req (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+    params = {
+        'cluster_id_list': csu_http.MANDATORY
+    }
+
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    cluster_id_list = pdict['cluster_id_list']
+    wait_online_list = list()
+    failed_cluster_list = list()
+    allow_alter_cluster_states = [cluster_state.OFFLINE, cluster_state.FAILED]
+    while len(cluster_id_list) or len(wait_online_list):
+        cluster_id = None
+        if len(cluster_id_list):
+            cluster_id = cluster_id_list.pop()
+        elif len(wait_online_list):
+            cluster_id = wait_online_list.pop()
+            time.sleep(3)
+
+        if not cluster_id:
+            break
+        try:
+            # get current state
+            cluster_dict = dao.get_cluster(cluster_id)
+            current_state = cluster_dict['state']
+            # only online state to offline
+            if current_state in allow_alter_cluster_states:
+                err_code, err_list = ha_mgr.online(cluster_id)
+                if err_code != 0:
+                    failed_cluster_list.append(f"{cluster_id} online failed, {err_list}.")
+                else:
+                    pg_helpers.update_cluster_room_info(cluster_id)
+            elif current_state == cluster_state.CHECKING:
+                if cluster_id not in wait_online_list:
+                    wait_online_list.append(cluster_id)
+            elif current_state == cluster_state.NORMAL:
+                continue
+
+            # if current state is others, not care
+        except Exception:
+            err_msg = traceback.format_exc()
+            failed_cluster_list.append(cluster_id)
+            logging.error(f"Online cluster({cluster_id}) with unexpected error, {err_msg}.")
+            break
+
+    if len(failed_cluster_list):
+        return 400, f"There some cluster online failed, {failed_cluster_list}."
+    return 200, "Batch online cluster success."
+
+
+def batch_offline_cluster(req):
+    """批量离线集群
+
+    Args:
+        req (_type_): _description_
+    """
+
+    params = {
+        'cluster_id_list': csu_http.MANDATORY
+    }
+
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    cluster_id_list = pdict['cluster_id_list']
+    wait_offline_list = list()
+    failed_cluster_list = list()
+    while len(cluster_id_list) or len(wait_offline_list):
+        cluster_id = None
+        if len(cluster_id_list):
+            cluster_id = cluster_id_list.pop()
+        elif len(wait_offline_list):
+            cluster_id = wait_offline_list.pop()
+            time.sleep(3)
+
+        if not cluster_id:
+            break
+        try:
+            # get current state
+            cluster_dict = dao.get_cluster(cluster_id)
+            current_state = cluster_dict['state']
+            # only online state to offline
+            if current_state == cluster_state.NORMAL:
+                err_code, err_msg = ha_mgr.offline(cluster_id)
+                if err_code != 0:
+                    failed_cluster_list.append(f"{cluster_id} offline failed, {err_msg}.")
+            elif current_state == cluster_state.CHECKING:
+                if cluster_id not in wait_offline_list:
+                    wait_offline_list.append(cluster_id)
+            elif current_state == cluster_state.OFFLINE:
+                continue
+
+            # if current state is others, not care
+        except Exception:
+            err_msg = traceback.format_exc()
+            failed_cluster_list.append(cluster_id)
+            logging.error(f"Offline cluster({cluster_id}) with unexpected error, {err_msg}.")
+            break
+
+    if len(failed_cluster_list):
+        return 400, f"There some cluster offline failed, {failed_cluster_list}."
+    return 200, "Batch offline cluster success."
+

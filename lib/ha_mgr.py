@@ -36,7 +36,6 @@ import database_state
 import db_encrypt
 import dbapi
 import general_task_mgr
-import lb_mgr
 import long_term_task
 import node_state
 import pg_db_lib
@@ -430,7 +429,7 @@ def failback(task_id: int, db_dict, restore_cluster_state):
         pdict['db_id'] = db_id
         pdict['port'] = db_port
         pdict['version'] = version
-     
+
         err_code, err_msg = rpc_utils.get_rpc_connect(pdict['host'])
         if err_code != 0:
             err_msg = f"{msg_prefix}: connect {pdict['host']} failed: {err_msg}"
@@ -575,19 +574,6 @@ def failback(task_id: int, db_dict, restore_cluster_state):
                 failback_trigger_func(task_id, msg_prefix, cluster_dict, before_cluster_dict, pri_host, db_port, failback_host, db_user, db_pass)
             except Exception as e:
                 logging.error(f"call failback trigger function failed: {repr(e)}")
-
-            # 把节点加回
-            str_cstlb_list = cluster_dict['cstlb_list']
-            if not str_cstlb_list:
-                cstlb_list = []
-            else:
-                cstlb_list = str_cstlb_list.split(',')
-                cstlb_list = [k.strip() for k in cstlb_list]
-            for lb_host in cstlb_list:
-                backend_addr = f"{failback_db_dict['host']}:{db_port}"
-                err_code, msg = lb_mgr.add_backend(lb_host, backend_addr)
-                if err_code != 0:
-                    log_error(task_id, f"Can not add host({backend_addr}) to cstlb({lb_host}): {msg}")
 
         general_task_mgr.complete_task(task_id, ret_code, err_msg)
         dao.set_cluster_state(cluster_id, restore_cluster_state)
@@ -903,21 +889,6 @@ def sr_switch(task_id, cluster_id, db_id, primary_db, keep_cascaded=False):
                 general_task_mgr.complete_task(task_id, -1, error_msg)
                 return 1, repr(e)
 
-        # 需要把新主库从负载均衡器cstlb中剔除掉(因为新主库原先是备库，而备库的IP是在cstlb中的)
-        log_info(task_id, f"{pre_msg}: begin remove new primary database({new_pri_db['host']}) from cstlb ...")
-        str_cstlb_list = cluster_dict.get('cstlb_list', '')
-        if not str_cstlb_list:
-            cstlb_list = []
-        else:
-            cstlb_list = str_cstlb_list.split(',')
-            cstlb_list = [k.strip() for k in cstlb_list]
-        for lb_host in cstlb_list:
-            backend_addr = f"{new_pri_db['host']}:{new_pri_db['port']}"
-            err_code, err_msg = lb_mgr.delete_backend(lb_host, backend_addr)
-            if err_code != 0:
-                log_error(task_id, f"Can not remove host({backend_addr}) from cstlb({lb_host}): {err_msg}")
-        log_info(task_id, f"{pre_msg}: remove new primary database({new_pri_db['host']}) from cstlb finished.")
-
         # 先把新主库关掉，然后把旧主库上比较新的xlog文件都拷贝过来：
         log_info(task_id, f'{pre_msg}: stop new pirmary database then sync wal from old primary ...')
         err_code, err_msg = rpc_utils.pg_cp_delay_wal_from_pri(
@@ -954,15 +925,6 @@ def sr_switch(task_id, cluster_id, db_id, primary_db, keep_cascaded=False):
                 general_task_mgr.complete_task(task_id, -1, "Switch failed.")
                 return -1, err_msg
         log_info(task_id, f'{pre_msg}: new pirmary database started and it is ready.')
-
-        # 因为旧主库切换成了Standby库，需要把旧主库添加到负载均衡器cstlb中：
-        log_info(task_id, f"{pre_msg}: begin add old primary database({old_pri_db['host']}) to cstlb...")
-        for lb_host in cstlb_list:
-            backend_addr = f"{old_pri_db['host']}:{old_pri_db['port']}"
-            err_code, err_msg = lb_mgr.add_backend(lb_host, backend_addr)
-            if err_code != 0:
-                log_error(task_id, f"Can not add host({backend_addr}) to cstlb({backend_addr}): {err_msg}")
-        log_info(task_id, f"{pre_msg}: add old primary database({old_pri_db['host']}) to cstlb finished.")
 
         # 把选中的这个备库激活成主库
         log_info(task_id, f'{pre_msg}: promote new primary ...')
