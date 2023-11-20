@@ -405,7 +405,7 @@ def failback(task_id: int, db_dict, restore_cluster_state):
             return 0, ''
 
         # 如果没有设置重新搭建，则直接返回失败
-        if not db_dict.get('is_rewind'):
+        if not db_dict.get('is_rewind') and not db_dict.get('is_rebuild'):
             err_code = -1
             err_msg = "The streaming replication status is abnormal. Please choose 'rewind' or rebuild the standby node to repair it."
             log_info(task_id, f'{msg_prefix}: {err_msg}')
@@ -486,10 +486,11 @@ def failback(task_id: int, db_dict, restore_cluster_state):
             # 表空间的新目录，如果不为空，也需要删除内容或改名
             tbl_list = pdict.get('tblspc_dir')
             try:
-                for k in tbl_list:
-                    tblspc_dir = k['new_dir']
-                    if not rpc.dir_is_empty(tblspc_dir):
-                        need_bak_dir_set.add(tblspc_dir)
+                if tbl_list:
+                    for k in tbl_list:
+                        tblspc_dir = k['new_dir']
+                        if not rpc.dir_is_empty(tblspc_dir):
+                            need_bak_dir_set.add(tblspc_dir)
             except Exception as e:
                 err_code = -1
                 err_msg = str(e)

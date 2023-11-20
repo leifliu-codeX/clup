@@ -404,14 +404,16 @@ def pg_init_bashrc(rpc, os_user_home, pg_bin_path, pgdata, port, pg_default_host
                 f"export LD_LIBRARY_PATH={pg_root_path}/lib:$LD_LIBRARY_PATH\n"
                 f"export PGDATA={pgdata}\n"
                 f"export PGHOST={pg_default_host}\n"
-                f"export PGPORT={port}"
+                f"export PGPORT={port}\n"
+                "export LANG=en_US.UTF8"
             )
         else:
             content = (
                 f"export PATH={pg_bin_path}:$PATH\n"
                 f"export LD_LIBRARY_PATH={pg_root_path}/lib:$LD_LIBRARY_PATH\n"
                 f"export PGDATA={pgdata}\n"
-                f"export PGPORT={port}"
+                f"export PGPORT={port}\n"
+                "export LANG=en_US.UTF8"
             )
         tag_line = '# ====== Add by clup init env '
         rpc.config_file_set_tag_in_head(bash_rc_file, tag_line, content)

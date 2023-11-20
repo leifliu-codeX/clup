@@ -827,55 +827,56 @@ def task_create_sr_cluster(task_id, cluster_id, rpc_dict):
     general_task_mgr.complete_task(task_id, task_state, err_msg)
 
 
-def create_polar_db(task_id, host, db_id, rpc_dict):
-    """[summary]
+def create_polardb(task_id, host, db_id, rpc_dict):
+    """create polardb with pfs shared disk
     Args:
         task_id ([type]): [description]
         db_dict ([type]): [description]
     """
-    err_code = 0
-    err_msg = ''
+    msg_prefix = f"Create polardb(db_id={db_id} on {host})"
+
+    step = 'Check the parameters for creating the database'
+    general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
+    required_params = [
+        "host",
+        "port",
+        "instance_name",
+        "os_user",
+        "os_uid",
+        "pg_bin_path",
+        "db_pass",
+        "db_user",
+        "setting_dict"
+    ]
+
+    for para in required_params:
+        if para not in rpc_dict:
+            err_code = -1
+            err_msg = f"{msg_prefix}: {step} failed, No parameters are provided in the configuration to create the database: {para}"
+            return err_code, err_msg
+
+    pg_bin_path = rpc_dict['pg_bin_path']
+    db_user = rpc_dict['db_user']
+    db_pass = rpc_dict['db_pass']
+    pgdata = rpc_dict['pgdata']
+    port = rpc_dict['port']
+    os_user = rpc_dict["os_user"]
+    general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
+
+    step = f'Connect to host({host})'
     rpc = None
     try:
-        msg_prefix = f"Create pg(db_id={db_id}) on {host}"
-
-        step = f'Connect to host: {host}'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         err_code, rpc = rpc_utils.get_rpc_connect(host)
         if err_code != 0:
             err_msg = rpc
             return err_code, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
+    except Exception:
+        return -1, f"{msg_prefix}: {step} with unexpected error, {traceback.format_exc()}."
 
-        step = 'Check the parameters for creating the database'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
-        required_params = [
-            "host",
-            "port",
-            "instance_name",
-            "os_user",
-            "os_uid",
-            "pg_bin_path",
-            "db_pass",
-            "db_user",
-            "setting_dict"
-        ]
-
-        for para in required_params:
-            if para not in rpc_dict:
-                err_code = -1
-                err_msg = f"{msg_prefix}: {step}step fail: No parameters are provided in the configuration to create the database: {para}, configuration: {rpc_dict}"
-                return err_code, err_msg
-
-        pg_bin_path = rpc_dict['pg_bin_path']
-        _pg_root_path = os.path.abspath(os.path.join(pg_bin_path, os.pardir))
-        db_user = rpc_dict['db_user']
-        db_pass = rpc_dict['db_pass']
-        pgdata = rpc_dict['pgdata']
-        port = rpc_dict['port']
-        os_user = rpc_dict["os_user"]
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
-
+    # create database
+    try:
         kwargs = {
             "os_user": os_user,
             "db_user": db_user,
@@ -886,252 +887,244 @@ def create_polar_db(task_id, host, db_id, rpc_dict):
         }
         polarCommon = polar_lib.PolarCommon(rpc, **kwargs)
 
-        step = 'create os_user'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
+        step = 'Check or create os user'
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         err_code, err_msg = polarCommon.create_os_user()
         if err_code != 0:
-            return err_code, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+            return -1, err_msg
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
         step = 'Add configuration in file(.bashrc)'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         err_code, err_msg = polarCommon.edit_bashrc()
         if err_code != 0:
-            return err_code, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+            return -1, err_msg
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        step = 'Create data directory'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
-        logging.info("Create_database : create_pg_data_dir")
+        step = 'Create local data directory'
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
+        logging.info("Create_database: create polar local data directory")
         err_code, err_msg = rpc.os_makedirs(pgdata, 0o700, exist_ok=True)
         if err_code != 0:
-            return err_code, err_msg
-
+            return -1, err_msg
         err_code, err_msg = pg_db_lib.set_pg_data_dir_mode(rpc, os_user, rpc_dict['pgdata'])
         if err_code != 0:
-            return err_code, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+            return -1, err_msg
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
         step = 'Execute the initialization command(initdb)'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         err_code, err_msg = polarCommon.init_db(db_pass)
         if err_code != 0:
-            return err_code, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+            return -1, err_msg
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        # 如果是主库就创建共享文件夹
-        is_primary = rpc_dict["is_primary"]
-        if is_primary:
-            step = 'Create a pfs shared folder'
-            general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
-            err_code, err_msg = polarCommon.mk_share_dir()
-            if err_code != 0:
-                return err_code, err_msg
-            general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+        step = 'Create pfs shared directory'
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
+        err_code, err_msg = polarCommon.mk_share_dir()
+        if err_code != 0:
+            return -1, err_msg
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        step = 'start pfs daemon'
+        step = 'Start pfs progress'
         err_code, err_msg = polarCommon.start_pfsdaemon()
         if err_code != 0 and err_code != 1:
-            return err_code, "Failed to start pfs daemon"
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+            return -1, "Failed to start pfs daemon"
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        # 如果是主库就执行polar-initdb拷贝文件到poalr_datadir
-        if is_primary:
-            step = 'Copy files to shared storage'
-            general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
-            err_code, err_msg = polarCommon.polar_initdb()
-            if err_code != 0:
-                return err_code, err_msg
-            general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+        step = 'Copy files to shared directory'
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
+        err_code, err_msg = polarCommon.polar_initdb()
+        if err_code != 0:
+            return -1, err_msg
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        step = 'configuration postgresql.conf'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
+        step = 'Configuration postgresql.conf'
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         err_code, err_msg = polarCommon.edit_postgresql_conf()
         if err_code != 0:
-            return err_code, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+            return -1, err_msg
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        step = 'configuration pg_hba.conf'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
+        step = 'Configuration pg_hba.conf'
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         err_code, err_msg = polarCommon.edit_hba_conf()
         if err_code != 0:
-            return 400, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+            return -1, err_msg
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        # 如果是只读节点，需要配置recovery.conf文件
-        if not is_primary:
-            step = 'Configure stream replication parameters'
-            general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
-            err_code, err_msg = polarCommon.edit_repl_conf()
-            if err_code != 0:
-                return err_code, err_msg
-            general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
-
-            # 将流复制密码写入到.pgpass中
-            step = 'Configure the stream replication user password.'
-            general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
-            repl_user = rpc_dict['repl_user']
-            repl_pass = rpc_dict["repl_pass"]
-            up_db_port = rpc_dict["up_db_port"]
-            up_db_repl_ip = rpc_dict["up_db_repl_ip"]
-            err_code, err_msg = pg_db_lib.dot_pgpass_add_item(
-                rpc, os_user, up_db_repl_ip, up_db_port, 'replication', repl_user, repl_pass,
-            )
-            if err_code != 0:
-                return err_code, err_msg
-            general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
-
-        step = 'start database'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
+        step = 'Start database'
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         err_code, err_msg = pg_db_lib.start(rpc, rpc_dict['pgdata'])
         if err_code < 0:
             err_msg = f'start db error :{err_msg}'
+            return -1, err_msg
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
+
+        step = 'Create extension in the database'
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
+        err_code, err_msg = polarCommon.create_extension()
+        if err_code != 0:
             return err_code, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        if is_primary:
-            step = 'Create extension in the database'
-            general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
-            err_code, err_msg = polarCommon.create_extension()
-            if err_code != 0:
-                return err_code, err_msg
-            general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
-
-            step = 'Create a replication slot in the primary database'
-            general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
-            err_code, err_msg = polarCommon.create_repl()
-            if err_code != 0:
-                return err_code, err_msg
-            general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+        # Delete Next
+        # step = 'Create a replication slot in database'
+        # general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
+        # err_code, err_msg = polarCommon.create_repl()
+        # if err_code != 0 and err_code != 1:
+        #     return err_code, err_msg
+        # elif err_code == 1:
+        #     return 0, err_msg
+        # general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
         return 0, ''
     except Exception:
         err_code = -1
-        err_msg = f"{msg_prefix}: {step} An unknown error has occurred: {traceback.format_exc()}"
+        err_msg = f"{msg_prefix}: {step} with unexpected error, {traceback.format_exc()}."
         logging.error(err_msg)
+        general_task_mgr.log_error(task_id, err_msg)
+        return err_code, err_msg
     finally:
-        del polarCommon
+        if polarCommon:
+            del polarCommon
         if rpc is not None:
             rpc.close()
-    return err_code, err_msg
 
 
-# Leifliu Test 搭建polardb共享存储reader节点
+def task_create_polardb(task_id, rpc_dict):
+    host = rpc_dict['host']
+    db_id = rpc_dict['db_id']
+    task_name = rpc_dict['task_name']
+    err_code, err_msg = create_polardb(task_id, host, db_id, rpc_dict)
+
+    ret_msg = ""
+    task_state = 0
+    db_state = database_state.CREATING
+    try:
+        if err_code != 0:
+            task_state = -1
+            db_state = database_state.FAULT
+            ret_msg = f"{task_name} failed: {err_msg}."
+        else:
+            task_state = 1
+            db_state = database_state.RUNNING
+            ret_msg = f"{task_name}: success."
+    except Exception:
+        task_state = -1
+        db_state = database_state.FAULT
+        ret_msg = f"{task_name}: run task create polardb with unexpected error, {traceback.format_exc()}."
+        logging.error(ret_msg)
+    finally:
+        dao.update_db_state(rpc_dict['db_id'], db_state)
+        general_task_mgr.complete_task(task_id, task_state, ret_msg)
+
+
 def build_polar_reader(task_id, host, db_id, rpc_dict):
-    """[summary]
+    """搭建polardb共享存储reader节点
     Args:
         task_id ([type]): [description]
         db_dict ([type]): [description]
     """
-    err_code = 0
-    err_msg = ''
+    msg_prefix = f"Create pg(db_id={db_id}) on {host}"
+
     try:
-        msg_prefix = f"Create pg(db_id={db_id}) on {host}"
-
-        step = f'Connect to host: {host}'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
-        rpc = None
-        err_code, rpc = rpc_utils.get_rpc_connect(host)
-        if err_code != 0:
-            err_msg = rpc
-            return err_code, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
-
         step = 'Check the parameters for creating the database'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
-
-        pg_bin_path = rpc_dict['pg_bin_path']
-        _pg_root_path = os.path.abspath(os.path.join(pg_bin_path, os.pardir))
-        db_user = rpc_dict['db_user']
-        pgdata = rpc_dict['pgdata']
-        port = rpc_dict['port']
-        os_user = rpc_dict["os_user"]
-        _db_pass = db_encrypt.from_db_text(rpc_dict['db_pass'])
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
-
-        kwargs = {
-            "os_user": os_user,
-            "db_user": db_user,
-            "pg_bin_path": pg_bin_path,
-            "pgdata": pgdata,
-            "port": port,
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
+        db_info = {
+            "os_user": rpc_dict["os_user"],
+            "db_user": rpc_dict['db_user'],
+            "pg_bin_path": rpc_dict['pg_bin_path'],
+            "pgdata": rpc_dict['pgdata'],
+            "port": rpc_dict['port'],
             "rpc_dict": rpc_dict
         }
-        polarCommon = polar_lib.PolarCommon(rpc, **kwargs)
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        step = 'create os_user'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
+        step = f'Connect to host({host})'
+        rpc = None
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
+        err_code, err_msg = rpc_utils.get_rpc_connect(host)
+        if err_code != 0:
+            return -1, err_msg
+        rpc = err_msg
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
+
+        # create database
+        polarCommon = polar_lib.PolarCommon(rpc, **db_info)
+
+        step = 'Check or create os user'
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         err_code, err_msg = polarCommon.create_os_user()
         if err_code != 0:
-            return err_code, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+            return -1, err_msg
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
         step = 'Add configuration in file(.bashrc)'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         err_code, err_msg = polarCommon.edit_bashrc()
         if err_code != 0:
-            return err_code, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+            return -1, err_msg
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
         step = 'Create data directory'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         logging.info("Create_database : create_pg_data_dir")
-        err_code, err_msg = rpc.os_makedirs(pgdata, 0o700, exist_ok=True)
+        err_code, err_msg = rpc.os_makedirs(db_info['pgdata'], 0o700, exist_ok=True)
         if err_code != 0:
-            return err_code, err_msg
-
-        err_code, err_msg = pg_db_lib.set_pg_data_dir_mode(rpc, os_user, rpc_dict['pgdata'])
+            return -1, err_msg
+        err_code, err_msg = pg_db_lib.set_pg_data_dir_mode(rpc, db_info['os_user'], rpc_dict['pgdata'])
         if err_code != 0:
-            return err_code, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+            return -1, err_msg
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        step = 'prepare .pgpass for replication user'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
+        step = 'Prepare .pgpass file for replication user'
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         # 连接主库的密码配置到.pgpass中
         repl_user = rpc_dict['repl_user']
         repl_pass = db_encrypt.from_db_text(rpc_dict["repl_pass"])
         up_db_port = rpc_dict["up_db_port"]
         up_db_repl_ip = rpc_dict["up_db_repl_ip"]
         err_code, err_msg = pg_db_lib.dot_pgpass_add_item(
-            rpc, os_user, up_db_repl_ip, up_db_port, 'replication', repl_user, repl_pass,
+            rpc, db_info["os_user"], up_db_repl_ip, up_db_port, 'replication', repl_user, repl_pass,
         )
         if err_code != 0:
-            return err_code, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+            return -1, err_msg
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        step = 'make dirs and cp master configure files'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
+        step = 'Make directories and copy master configure files'
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         err_code, err_msg = polar_lib.init_polar_reader(rpc, rpc_dict)
         if err_code != 0:
-            return err_code, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+            return -1, err_msg
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        step = 'start pfs daemon'
+        step = 'Start pfs progress'
         err_code, err_msg = polarCommon.start_pfsdaemon()
         if err_code != 0 and err_code != 1:
-            return err_code, "Failed to start pfs daemon"
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+            return -1, "Failed to start pfs daemon"
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        step = 'configuration postgresql.conf'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
+        step = 'Configuration postgresql.conf'
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         err_code, err_msg = polar_lib.edit_reader_postgresql_conf(rpc, rpc_dict)
         if err_code != 0:
-            return err_code, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+            return -1, err_msg
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        step = 'configuration pg_hba.conf'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
+        step = 'Configuration pg_hba.conf'
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         err_code, err_msg = polarCommon.edit_hba_conf()
         if err_code != 0:
-            return err_code, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+            return -1, err_msg
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        step = 'configuration recovery.conf'
+        step = 'Configuration recovery.conf'
         repl_app_name = rpc_dict['repl_app_name']
         polar_hostid = rpc_dict["polar_hostid"]
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         err_code, err_msg = polar_lib.edit_reader_conf(
             rpc,
-            pgdata,
+            db_info["pgdata"],
             repl_app_name,
             repl_user,
             up_db_repl_ip,
@@ -1139,165 +1132,131 @@ def build_polar_reader(task_id, host, db_id, rpc_dict):
             polar_hostid
         )
         if err_code != 0:
-            return err_code, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+            return -1, err_msg
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        step = 'Create a stream replication in the primary database'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
+        step = 'Create a replication slot in the master database'
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         slot_name = f'replica{rpc_dict["polar_hostid"]}'
         err_code, err_msg = polar_lib.create_replication_slot(rpc_dict, slot_name)
         if err_code != 0 and err_code != 1:
-            return err_code, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+            return -1, err_msg
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        step = 'start database'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
+        step = 'Start database'
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         err_code, err_msg = pg_db_lib.start(rpc, rpc_dict['pgdata'])
         if err_code < 0:
             err_msg = f'start db error :{err_msg}'
-            return err_code, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+            return -1, err_msg
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        del polarCommon
-        return 0, ''
+        return 0, 'Create polar reader database success'
     except Exception:
-        err_msg = f"{msg_prefix}: {step} An unknown error occurs: {traceback.format_exc()}"
+        err_msg = f"{msg_prefix}: {step} with unexpected error, {traceback.format_exc()}."
+        general_task_mgr.log_error(task_id, err_msg)
         logging.error(err_msg)
         return -1, err_msg
     finally:
+        if polarCommon:
+            del polarCommon
         if rpc:
             rpc.close()
 
 
-# Leifliu Test
 def build_polar_standby(task_id, host, db_id, rpc_dict):
+    msg_prefix = f"Build standby(db_id={db_id} on {host})"
+
     try:
-        msg_prefix = f"Build standby(db_id={db_id}) on {host}"
-        step = f'Connect to host: {host}'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
-        err_code, rpc = rpc_utils.get_rpc_connect(host)
-        if err_code != 0:
-            err_msg = rpc
-            return err_code, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
-
         step = 'Check the parameters for creating a standby database'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
-
-        required_params = [
-            'db_id',  # 备库的db_id
-            'up_db_port',  # 上级库端口
-            'up_db_repl_ip',  # 上级库流复制ip
-            'instance_type',
-            'os_user',
-            'os_uid',
-            'pg_bin_path',
-            'db_user',
-            'repl_user',
-            'repl_pass',
-            'pgdata',  # 数据库的数据目录
-            'repl_app_name',  # 流复制的application_name
-            'version',  # 数据库的版本
-            # "setting_list'
-        ]
-
-        mask_rpc_dict = {}
-        mask_rpc_dict.update(rpc_dict)
-        if 'repl_pass' in mask_rpc_dict:
-            mask_rpc_dict['repl_pass'] = '******'
-
-        for para in required_params:
-            if para not in rpc_dict:
-                err_code = -1
-                err_msg = f"{msg_prefix}: {step}step fail: This parameter is not provided in the create database configuration: {para}, configuration: {mask_rpc_dict}"
-                return err_code, err_msg
-
-        up_db_repl_ip = rpc_dict['up_db_repl_ip']
-        up_db_port = rpc_dict['up_db_port']
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         repl_user = rpc_dict['repl_user']
+        up_db_port = rpc_dict['up_db_port']
+        up_db_repl_ip = rpc_dict['up_db_repl_ip']
         repl_pass = db_encrypt.from_db_text(rpc_dict['repl_pass'])
-        db_user = rpc_dict['db_user']  # 这是数据库中的超级用户，创建出来的数据库在本地的os_user下，可以不需要密码的就能登录数据库
-        os_user = rpc_dict["os_user"]
-        _version = rpc_dict['version']
-        pgdata = rpc_dict['pgdata']
-        port = rpc_dict['port']
-        pg_bin_path = rpc_dict['pg_bin_path']
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
 
-        kwargs = {
-            "os_user": os_user,
-            "db_user": db_user,
-            "pg_bin_path": pg_bin_path,
-            "pgdata": pgdata,
-            "port": port,
+        db_info = {
+            "os_user": rpc_dict["os_user"],
+            "db_user": rpc_dict['db_user'],
+            "pg_bin_path": rpc_dict['pg_bin_path'],
+            "pgdata": rpc_dict['pgdata'],
+            "port": rpc_dict['port'],
             "rpc_dict": rpc_dict
         }
-        polarCommon = polar_lib.PolarCommon(rpc, **kwargs)
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        step = 'create os user'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
+        step = f'Connect to host: {host}'
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
+        err_code, err_msg = rpc_utils.get_rpc_connect(host)
+        if err_code != 0:
+            return -1, err_msg
+        rpc = err_msg
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
+
+        polarCommon = polar_lib.PolarCommon(rpc, **db_info)
+
+        step = 'Check or create os user'
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         err_code, err_msg = polarCommon.create_os_user()
         if err_code != 0:
             return err_code, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
         step = 'Add configuration in file(.bashrc)'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         err_code, err_msg = polarCommon.edit_bashrc()
         if err_code != 0:
             return err_code, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
         step = 'Create data directory'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         logging.info("Create_database : create_pg_data_dir")
-        err_code, err_msg = rpc.os_makedirs(pgdata, 0o700, exist_ok=True)
+        err_code, err_msg = rpc.os_makedirs(db_info['pgdata'], 0o700, exist_ok=True)
         if err_code != 0:
             return err_code, err_msg
-
-        err_code, err_msg = pg_db_lib.set_pg_data_dir_mode(rpc, os_user, rpc_dict['pgdata'])
+        err_code, err_msg = pg_db_lib.set_pg_data_dir_mode(rpc, db_info['os_user'], rpc_dict['pgdata'])
         if err_code != 0:
             return err_code, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        step = 'prepare .pgpass for pg_basebackup'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
-        # 连接主库的密码配置到.pgpass中
+        step = 'Prepare .pgpass for pg_basebackup'
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         err_code, err_msg = pg_db_lib.dot_pgpass_add_item(
-            rpc, os_user, up_db_repl_ip, up_db_port, 'replication', repl_user, repl_pass,
+            rpc, db_info['os_user'], up_db_repl_ip, up_db_port, 'replication', repl_user, repl_pass,
         )
         if err_code != 0:
             return err_code, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        step = 'pg_basebackup'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
+        step = 'Running polar_basebackup commond'
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         err_code, err_msg = polarCommon.polar_basebackup(task_id, msg_prefix)
         if err_code != 0:
             return err_code, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        step = 'configuration postgresql.conf'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
+        step = 'Configuration postgresql.conf'
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         err_code, err_msg = polar_lib.edit_standby_postgresql_conf(rpc, rpc_dict)
         if err_code != 0:
             return err_code, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        step = 'configuration pg_hba.conf'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
+        step = 'Configuration pg_hba.conf'
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         err_code, err_msg = polarCommon.edit_hba_conf()
         if err_code != 0:
             return err_code, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        step = 'Configure stream replication parameters'
+        step = 'Configuration recovery.conf'
         repl_app_name = rpc_dict['repl_app_name']
         polar_hostid = rpc_dict["polar_hostid"]
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         err_code, err_msg = polar_lib.edit_standby_conf(
             rpc,
-            pgdata,
+            db_info['pgdata'],
             repl_app_name,
             repl_user,
             up_db_repl_ip,
@@ -1306,38 +1265,41 @@ def build_polar_standby(task_id, host, db_id, rpc_dict):
         )
         if err_code != 0:
             return err_code, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        step = 'Create a stream replication in the primary database'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
+        step = 'Create a replication slot in the master database'
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         slot_name = f'standby{rpc_dict["polar_hostid"]}'
         err_code, err_msg = polar_lib.create_replication_slot(rpc_dict, slot_name)
         if err_code != 0:
-            general_task_mgr.log_info(task_id, f"{msg_prefix}: {step}step fail: {err_msg},Please check and repair manually.")
+            general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} failed, {err_msg}, Please check and repair manually.")
         else:
-            general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
+            general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        step = 'start database'
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: start step: {step} ...")
+        step = 'Start database'
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         err_code, err_msg = pg_db_lib.start(rpc, rpc_dict['pgdata'])
         if err_code < 0:
             err_msg = f'start pg db error: {err_msg}'
             return 0, err_msg
-        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
-        del polarCommon
-        return 0, ''
+        general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
+
+        return 0, 'Create standby polardb success.'
     except Exception:
-        err_code = -1
-        err_msg = f"{msg_prefix}: {step}An unknown error occurs:  {traceback.format_exc()}"
+        err_msg = f"{msg_prefix}: {step} with unexpected error, {traceback.format_exc()}."
         logging.error(err_msg)
+        general_task_mgr.log_error(task_id, err_msg)
+        return -1, err_msg
     finally:
-        if rpc is not None:
+        if polarCommon:
+            del polarCommon
+        if rpc:
             rpc.close()
-    return err_code, err_msg
 
 
-# 创建polardb共享存储集群
 def create_polar_sd_cluster(task_id, cluster_id, pdict):
+    """创建polardb共享存储集群
+    """
     pre_msg = f"Create polardb sd cluster (cluster_id: {cluster_id})"
     try:
         db_list = pdict['db_list']
@@ -1414,7 +1376,7 @@ def create_polar_sd_cluster(task_id, cluster_id, pdict):
         for index in range(len(db_list) - 1):
             rpc_dict["primary_slot_name"].append(f"replica{index + 2}")
 
-        err_code, err_msg = create_polar_db(task_id, rpc_dict['host'], primary_db_id, rpc_dict)
+        err_code, err_msg = create_polardb(task_id, rpc_dict['host'], primary_db_id, rpc_dict)
         if err_code != 0:
             dao.update_db_state(rpc_dict['db_id'], database_state.FAULT)
             err_msg = f"{pre_msg}: Database creation failure: {err_msg}"
@@ -1436,12 +1398,8 @@ def create_polar_sd_cluster(task_id, cluster_id, pdict):
             if db == pri_dict:
                 # 是主库就跳过
                 continue
-            general_task_mgr.log_info(task_id, f"{pre_msg}: Start building standby on {db['host']}")
-            err_code, _rpc = rpc_utils.get_rpc_connect(db['host'])
-            if err_code != 0:
-                msg = f"Host connection failure({db['host']}), please check service clup-agent is running!"
-                return -1, msg
 
+            general_task_mgr.log_info(task_id, f"{pre_msg}: Start building standby on {db['host']}")
             # db_dict存储搭建备库需要的参数
             db_dict = {}
             db_dict.update(db)
@@ -1503,9 +1461,8 @@ def create_polar_sd_cluster(task_id, cluster_id, pdict):
             rpc_dict['port'] = pdict['port']
             rpc_dict['pg_bin_path'] = db['pg_bin_path']
             rpc_dict['pgdata'] = db['pgdata']
-            rpc_dict['db_user'] = pdict['db_user']   # 数据库用户，当db_user禹os_user不相同是，需要在pg_hba.conf中加用户映射，否则本地无法误密码的登录数据库
+            rpc_dict['db_user'] = pdict['db_user']   # 数据库用户，当db_user与os_user不相同时，需要在pg_hba.conf中加用户映射
             rpc_dict['repl_user'] = pdict['repl_user']
-            # rpc_dict['repl_pass'] = db_encrypt.from_db_text(pdict['repl_pass'])
             rpc_dict['repl_pass'] = pdict['repl_pass']
             rpc_dict['delay'] = 0
             rpc_dict['instance_type'] = 'physical'
@@ -1534,17 +1491,17 @@ def create_polar_sd_cluster(task_id, cluster_id, pdict):
             else:
                 dao.update_db_state(rpc_dict['db_id'], database_state.RUNNING)
 
+            return err_code, err_msg
     except Exception:
         err_code = -1
         err_msg = traceback.format_exc()
-    return err_code, err_msg
 
 
 def task_create_polar_sd_cluster(task_id, cluster_id, rpc_dict):
     err_code, err_msg = create_polar_sd_cluster(task_id, cluster_id, rpc_dict)
     if err_code == 0:
         task_state = 1
-        err_msg = "Success"
+        err_msg = "Create polardb sd cluster success."
     else:
         task_state = -1
     general_task_mgr.complete_task(task_id, task_state, err_msg)
