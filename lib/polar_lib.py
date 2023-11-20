@@ -29,6 +29,7 @@ import traceback
 
 import dao
 import dbapi
+import pg_utils
 import pg_db_lib
 import rpc_utils
 import cluster_state
@@ -116,6 +117,10 @@ class PolarCommon:
             setting_dict["polar_hostid"] = self.rpc_dict["polar_hostid"]
             setting_dict["polar_disk_name"] = pfs_disk_name
             setting_dict["polar_datadir"] = f"/{pfs_disk_name}/{polar_datadir}/"
+            setting_dict['polar_vfs.localfs_mode'] = "off"
+            setting_dict['polar_enable_shared_storage_mode'] = "on"
+            setting_dict['polar_storage_cluster_name'] = setting_dict.get("polar_storage_cluster_name", "disk")
+
             postgresql_conf = f'{self.pgdata}/postgresql.conf'
             content = ''
             key_words = ['on', 'off']
@@ -164,31 +169,31 @@ class PolarCommon:
             self.rpc.config_file_set_tag_content(pg_ident_conf_file, tag_line, content)
         return 0, 'Successfully configured pg_hba.conf.'
 
-    # 修改流复制配置,暂时指定为recovery.conf
-    def edit_repl_conf(self):
-        rpc = self.rpc
-        version = self.rpc_dict['version']
-        pgdata = self.rpc_dict['pgdata']
-        up_db_repl_ip = self.rpc_dict['up_db_repl_ip']
-        repl_user = self.rpc_dict['repl_user']
-        repl_pass = self.rpc_dict["repl_pass"]
-        up_db_port = self.rpc_dict["up_db_port"]
-        primary_slot_name = self.rpc_dict["primary_slot_name"]
-        repl_app_name = self.rpc_dict['repl_app_name']
-        recovery_min_apply_delay = self.rpc_dict.get('recovery_min_apply_delay', None)
-        pg_major_int_version = int(str(version).split('.')[0])
-        err_code, err_msg = set_sr_config_file(
-            rpc,
-            pg_major_int_version,
-            repl_user, repl_pass,
-            up_db_repl_ip,
-            up_db_port,
-            repl_app_name,
-            pgdata,
-            primary_slot_name,
-            recovery_min_apply_delay
-        )
-        return err_code, err_msg
+    # Delete Next: 修改流复制配置,暂时指定为recovery.conf
+    # def edit_repl_conf(self):
+    #     rpc = self.rpc
+    #     version = self.rpc_dict['version']
+    #     pgdata = self.rpc_dict['pgdata']
+    #     up_db_repl_ip = self.rpc_dict['up_db_repl_ip']
+    #     repl_user = self.rpc_dict['repl_user']
+    #     repl_pass = self.rpc_dict["repl_pass"]
+    #     up_db_port = self.rpc_dict["up_db_port"]
+    #     primary_slot_name = self.rpc_dict["primary_slot_name"]
+    #     repl_app_name = self.rpc_dict['repl_app_name']
+    #     recovery_min_apply_delay = self.rpc_dict.get('recovery_min_apply_delay', None)
+    #     pg_major_int_version = int(str(version).split('.')[0])
+    #     err_code, err_msg = set_sr_config_file(
+    #         rpc,
+    #         pg_major_int_version,
+    #         repl_user, repl_pass,
+    #         up_db_repl_ip,
+    #         up_db_port,
+    #         repl_app_name,
+    #         pgdata,
+    #         primary_slot_name,
+    #         recovery_min_apply_delay
+    #     )
+    #     return err_code, err_msg
 
     # 添加插件
     def create_extension(self):
@@ -214,19 +219,21 @@ class PolarCommon:
         err_code = self.rpc.run_cmd(cmd_start_pfsdaemon)
         return err_code, ''
 
-    # 创建复制槽
-    def create_repl(self):
-        db_name = 'postgres'
-        primary_slot_name_list = self.rpc_dict["primary_slot_name"]
-        sql = ''
-        for slot_name in primary_slot_name_list:
-            sql = sql + f"select pg_create_physical_replication_slot('{slot_name}');"
-        cmd = f"""su - {self.os_user} -c "psql -U {self.db_user} -p {self.port} -d {db_name}  -c \\"{sql}\\" " """
-        err_code, err_msg, _out_msg = self.rpc.run_cmd_result(cmd)
-        if err_code != 0:
-            err_msg = f"run cmd: {cmd} failed: {err_msg}"
-            return err_code, err_msg
-        return err_code, err_msg
+    # Delete Next: 创建复制槽
+    # def create_repl(self):
+    #     db_name = 'postgres'
+    #     primary_slot_name_list = self.rpc_dict.get("primary_slot_name")
+    #     if not primary_slot_name_list:
+    #         return 1, "There is no slot need to create in primary."
+    #     sql = ''
+    #     for slot_name in primary_slot_name_list:
+    #         sql = sql + f"select pg_create_physical_replication_slot('{slot_name}');"
+    #     cmd = f"""su - {self.os_user} -c "psql -U {self.db_user} -p {self.port} -d {db_name}  -c \\"{sql}\\" " """
+    #     err_code, err_msg, _out_msg = self.rpc.run_cmd_result(cmd)
+    #     if err_code != 0:
+    #         err_msg = f"run cmd: {cmd} failed: {err_msg}"
+    #         return err_code, err_msg
+    #     return err_code, err_msg
 
     # 创建pfs共享文件夹
     def mk_share_dir(self):
@@ -315,7 +322,7 @@ def update_polar_type(db_id, polar_type):
     return 0, ""
 
 
-def get_pfs_info(db_id):
+def get_db_pfs_info(db_id):
     """获取polardb pfs的相关信息
     :param db_id:
     :return 根据db_id返回pfs相关信息
@@ -335,7 +342,7 @@ def start_pfs(host, db_id=None, pfs_dict=None):
     """启动pfs
     """
     if db_id:
-        pfs_dict = get_pfs_info(db_id)
+        pfs_dict = get_db_pfs_info(db_id)
     if not pfs_dict:
         return -1, "No information related to pfs was found for this database."
     try:
@@ -364,7 +371,7 @@ def stop_pfs(host, db_id=None, pfs_dict=None):
     """停止pfs
     """
     if db_id:
-        pfs_dict = get_pfs_info(db_id)
+        pfs_dict = get_db_pfs_info(db_id)
     if not pfs_dict:
         return -1, "There is no information related to pfs in the database, Please stop pfsdaemon manually."
     try:
@@ -1407,6 +1414,16 @@ def check_disk_on_host(host, pfs_disk_name):
         curr_dev_no = int(cells[0]), int(cells[1])
         if curr_dev_no in mounted_dev:
             return -1, f"Partition {fn} is mounted in host({host})"
+
+    # check pfs disk aready format or not
+    pfs_disk_name = dev_path.split("/dev/")[-1]
+    cmd = f"echo `pfs info {pfs_disk_name}`"
+    err_code, err_msg, _out_msg = rpc.run_cmd_result(cmd)
+    if err_code != 0:
+        return -1, f"run cmd({cmd}) failed, {err_msg}."
+    if _out_msg == "\n":
+        return 1, "Is not formated."
+
     return 0, 'Is Ok'
 
 
@@ -1417,24 +1434,18 @@ def check_pfs_disk_name_validity(host_list, pfs_disk_name):
     否则返回 (False, msg) # msg 为 结果/报错 信息。
     """
     failed_host_msg = []
+    pfs_disk_formated = False
     for host in host_list:
         code, result = check_disk_on_host(host, pfs_disk_name)
-        if code != 0:
+        if code != 0 and code != 1:
             failed_host_msg.append(result)
+        elif code == 0:
+            pfs_disk_formated = True
 
     if failed_host_msg:
         return -1, ''.join(failed_host_msg)
 
-    return 0, ''
-
-    # check_fixed_pfs_disk_name_validity = partial(check_disk_on_host, pfs_disk_name)
-    # with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-    #     check_result = list(executor.map(check_fixed_pfs_disk_name_validity, host))
-    # # If all elements extracted from the first element of result<(bool, str)> are True
-    # if all(map(lambda x: x[0], check_result)):
-    #     return 0, ''
-    # else:
-    #     return -1, '; '.join(map(lambda x: x[1], check_result))
+    return 0, pfs_disk_formated
 
 
 def major(devno):
@@ -1456,3 +1467,186 @@ def minor(devno):
     """
     mi = (devno & 0xff) | ((devno >> 12) & 0xffffff00)
     return mi
+
+
+def get_pfs_info(host, pfs_disk_name, directory_name=None):
+    """get the pfs information
+
+    returns:
+        {
+            'pfs_disk_name': 'nvmecsu01',
+            'dev_name': 'sda',
+            'dev_size': 30.0,
+            'current_chunks': 2,
+            'free_size': 13.47,
+            'blk_numbers': 5120,
+            'blk_free_numbers': 3449,
+            'blk_usage': 32.64,
+            'dir_numbers': 4096,
+            'dir_free_numbers': 2520,
+            'dir_usage': 38.48
+        }
+    """
+
+    step = "Get the dev info"
+    try:
+        # connect the host
+        err_code, err_msg = rpc_utils.get_rpc_connect(host, 2)
+        if err_code != 0:
+            return -1, f"{step} failed, {err_msg}."
+        rpc = err_msg
+
+        pfs_disk_info = {"pfs_disk_name": pfs_disk_name}
+        # get the disk DEVNAME
+        cmd = f"udevadm info --query=property --name={pfs_disk_name} | grep DEVNAME"
+        err_code, err_msg, out_msg = rpc.run_cmd_result(cmd)
+        if err_code != 0:
+            return -1, f"{step}: run cmd({cmd}) failed, {err_msg}."
+        dev_name = out_msg.split("=")[-1]
+        if dev_name.startswith("/dev"):
+            # strip '/dev/
+            dev_name = dev_name.strip("\n").split("/dev/")[-1]
+            pfs_disk_info['dev_name'] = dev_name
+
+        # get the disk size
+        cmd = f"lsblk -b -o name,size |grep {dev_name}"
+        err_code, err_msg, out_msg = rpc.run_cmd_result(cmd)
+        if err_code != 0:
+            return -1, f"{step}: run cmd({cmd}) failed, {err_msg}."
+        dev_size_bytes = int(out_msg. split(" ")[-1])
+
+        # exchange unit to GB
+        dev_size = round(dev_size_bytes / 1024 / 1024 / 1024, 2)
+        pfs_disk_info['dev_size'] = dev_size
+
+    except Exception:
+        return -1, f"{step} with unexpected error, {traceback.format_exc()}."
+    finally:
+        if rpc:
+            rpc.close()
+
+    step = "Get the pfs info"
+    try:
+        # connect the host
+        err_code, err_msg = rpc_utils.get_rpc_connect(host, 2)
+        if err_code != 0:
+            return -1, f"{step} failed, {err_msg}."
+        rpc = err_msg
+
+        # get pfs disk info, pfs is not stdout, use echo
+        cmd = f"echo `pfs -C disk info {pfs_disk_name}`"
+        err_code, err_msg, out_msg = rpc.run_cmd_result(cmd)
+        if err_code != 0:
+            return -1, f"{step}: run cmd({cmd}) failed, {err_msg}."
+        elif out_msg == "\n":
+            return -1, f"{step} failed, cant the disk info, maybe the pfs disk is not formated."
+
+        """
+        Blktag Info: (0)allocnode: id 0, shift 0, nchild=2, nall 5120, nfree 3452, next 0 Direntry Info:
+        (0)allocnode: id 0, shift 0, nchild=2, nall 4096, nfree 2522, next 0 Inode Info:
+        (0)allocnode: id 0, shift 0, nchild=2, nall 4096, nfree 2522, next 0
+        """
+
+        # Blktag Info
+        blk_split = out_msg.split("Blktag Info: ")[-1]
+        blk_info, dir_split = blk_split.split("Direntry Info:")
+        dir_info = dir_split.split("Inode Info:")[0]
+        # block usage
+        blk_usage = blk_info.split(",")
+        for infor_content in blk_usage:
+            if "nall"in infor_content:
+                blk_numbers = int(infor_content.split(" ")[-1])
+                pfs_disk_info['blk_numbers'] = blk_numbers
+            elif "nchild" in infor_content:
+                chunks = int(infor_content.split("=")[-1])  # 1chunks = 10GB
+                pfs_disk_info['current_chunks'] = chunks
+            elif "nfree" in infor_content:
+                blk_free_numbers = int(infor_content. split(" ")[-1])
+                free_size = blk_free_numbers * 4 / 1024 # GB
+                pfs_disk_info['blk_free_numbers'] = blk_free_numbers
+                pfs_disk_info['free_size'] = round(free_size, 2)
+        # add blk usage info
+        blk_usaged = round(1 - (pfs_disk_info['blk_free_numbers'] / pfs_disk_info['blk_numbers']), 4)
+        pfs_disk_info['blk_use_rate'] = blk_usaged * 100
+
+        # directory usage
+        directory_usage = dir_info. split(",")
+        for infor in directory_usage:
+            if "nall" in infor:
+                dir_numbers = infor. split(" ")[-1]
+                pfs_disk_info['dir_numbers'] = int(dir_numbers)
+            elif "nfree" in infor:
+                dir_free_numbers = infor. split(" ")[-1]
+                pfs_disk_info['dir_free_numbers'] = int(dir_free_numbers)
+        # add directory usage
+        dir_usaged = round(1 - (pfs_disk_info['dir_free_numbers'] / pfs_disk_info['dir_numbers']), 4)
+        pfs_disk_info['dir_use_rate'] = dir_usaged * 100
+
+        # if params has directory_name,need get the directory usage
+        if directory_name:
+            # get the directory_name usage
+            cmd = f"echo `pfs -C disk du /{pfs_disk_name}/{directory_name}/`"
+            err_code, err_msg, out_msg = rpc. run_cmd_result(cmd)
+            if err_code != 0:
+                return -1, f"{step}: get the directory usage failed, {err_msg}."
+            else:
+                # ..256 /nvme1n1/shared_data//pg_replslot 1006080 /nvme1n1/shared_data/
+                directory_used = int(out_msg.split(" ")[-2]) # KB
+                # directory_used = info_lines[-1].split(" ")[0]
+                pfs_disk_info['directory_used'] = {
+                    directory_name: round(directory_used / 1024 / 1024, 2)  # GB
+                }
+        return 0, pfs_disk_info
+    except Exception:
+        return -1, traceback.format_exc()
+    finally:
+        if rpc:
+            rpc.close()
+
+
+def pfs_growfs(db_info, pfs_disk_name, current_chunks, target_chunks):
+    """扩容pfs 磁盘
+
+    Args:
+        host (_type_): _description_
+        pfs_disk_name (_type_): _description_
+        current_chunks (_type_): _description_
+        target_chunks (_type_): _description_
+    """
+
+    step = "Pfs disk growfs"
+    host = db_info['host']
+
+    try:
+        # connect the host
+        err_code, err_msg = rpc_utils.get_rpc_connect(host, 2)
+        if err_code != 0:
+            return -1, f"{step} failed, {err_msg}."
+        rpc = err_msg
+
+        # disk growfs
+        cmd = f"echo `pfs -C disk growfs -o {current_chunks} -n {target_chunks} {pfs_disk_name}`"
+        err_code, err_msg, _out_msg = rpc.run_cmd_result(cmd)
+        if err_code != 0:
+            return -1, f"{step} failed, {err_msg}."
+        rpc.close()
+
+        # test create extension
+        sql = "CREATE EXTENSION IF NOT EXISTS polar_vfs"
+        err_code, err_msg = pg_utils.sql_exec(host, db_info['port'], 'template1', db_info['db_user'], db_info['db_pass'], sql)
+        if err_code != 0:
+            return -1, f"Test to create extension on database(host={host}, port={db_info['port']}, db='template1') failed, {err_msg}."
+
+        # database growfs
+        sql = f"SELECT polar_vfs_disk_expansion('{pfs_disk_name}')"
+        err_code, err_msg = pg_utils.sql_exec(host, db_info['port'], 'template1', db_info['db_user'], db_info['db_pass'], sql)
+        if err_code != 0:
+            return -1, f"Growfs on database(host={host}, port={db_info['port']}, db='template1') failed, {err_msg}."
+
+    except Exception:
+        return -1, f"Pfs growfs with unexpected error, {traceback.format_exc()}."
+    finally:
+        if rpc:
+            rpc.close()
+
+    return 0, "Growfs success"

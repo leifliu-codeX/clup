@@ -28,7 +28,9 @@ import logging
 import traceback
 
 import dao
+import db_type_def
 import database_state
+import cluster_state
 import db_encrypt
 import dbapi
 import general_task_mgr
@@ -644,6 +646,93 @@ def recovery_master(task_id, msg_prefix, pdict):
         err_msg = f"recovery polardb to local storage with unexcept error, {traceback.format_exc()}"
         general_task_mgr.log_error(task_id, err_msg)
         return -1, err_msg
+
+
+def create_polardb_with_pfs(pdict):
+    # insert db info into clup_db
+    try:
+        # db_detail cloumn data
+        db_detail = {
+            'os_user': pdict['os_user'],
+            'os_uid': pdict['os_uid'],
+            'pg_bin_path': pdict['pg_bin_path'],
+            'db_user': pdict['db_user'],
+            'db_pass': pdict['db_pass'],
+            'version': pdict['version'],
+            'polar_type': 'master',
+            "polar_hostid": 1,
+            'pfs_disk_name': pdict['pfs_disk_name'],
+            'polar_datadir': pdict["polar_datadir"],
+            'pfsdaemon_params': pdict['pfsdaemon_params']
+        }
+
+        # db info
+        db_info = {
+            "polar_hostid": 1,
+            "is_primary": 1,
+            "scores": pdict.get("scores", 0),
+            "host": pdict["host"],
+            "port": pdict["port"],
+            "pgdata": pdict["pgdata"],
+            "state": cluster_state.NORMAL,
+            "db_state": database_state.CREATING,
+            "db_detail": json.dumps(db_detail),
+            "repl_ip": pdict.get("repl_ip", pdict["host"]),
+            "repl_app_name": pdict['host'],
+            "db_type": db_type_def.POLARDB
+        }
+
+        sql = "INSERT INTO clup_db (state, pgdata, is_primary, repl_app_name, host," \
+              " repl_ip, db_detail, port, db_state, scores, db_type) VALUES " \
+              "(%(state)s, %(pgdata)s, %(is_primary)s, %(repl_app_name)s, %(host)s, " \
+              " %(repl_ip)s, %(db_detail)s, %(port)s, %(db_state)s, %(scores)s, %(db_type)s) RETURNING db_id"
+        rows = dbapi.query(sql, db_info)
+        if len(rows) == 0:
+            err_msg = 'Cant insert database information into clup_db.'
+            return -1, err_msg
+        db_id = rows[0]['db_id']
+    except Exception:
+        return -1, f"Insert database information into clup_db with unexpected error, {traceback.format_exc()}."
+
+    # create task for create database instance
+    try:
+        task_name = "create polardb with shared disk"
+
+        rpc_dict = dict()
+        rpc_dict.update(db_info)
+        del rpc_dict['db_detail']
+        rpc_dict['db_id'] = db_id
+        rpc_dict['task_name'] = task_name
+        rpc_dict['instance_name'] = rpc_dict['host']
+        rpc_dict["os_uid"] = pdict["os_uid"]
+        rpc_dict["os_user"] = pdict["os_user"]
+        rpc_dict["db_user"] = pdict["db_user"]
+        rpc_dict["version"] = pdict["version"]
+        rpc_dict["pg_bin_path"] = pdict["pg_bin_path"]
+        rpc_dict['db_pass'] = db_encrypt.from_db_text(pdict['db_pass'])
+
+        rpc_dict["polar_hostid"] = 1
+        rpc_dict['pfsdaemon_params'] = pdict['pfsdaemon_params']
+        rpc_dict['pfs_disk_name'] = pdict['pfs_disk_name']
+        rpc_dict['polar_datadir'] = pdict['polar_datadir']
+
+        setting_dict = long_term_task.pg_setting_list_to_dict(pdict['setting_list'])
+        setting_dict['port'] = pdict['port']
+        rpc_dict['setting_dict'] = setting_dict
+
+        task_id = general_task_mgr.create_task(
+            task_type=task_type_def.PG_CREATE_INSTANCE_TASK,
+            task_name=task_name,
+            task_data=rpc_dict
+        )
+        general_task_mgr.run_task(task_id, long_term_task.task_create_polardb, (rpc_dict, ))
+    except Exception:
+        err_msg = f"Create task for create polardb with unexpected error, {traceback.format_exc()}."
+        if task_id:
+            general_task_mgr.complete_task(task_id, -1, err_msg)
+        dao.update_db_state(rpc_dict['db_id'], database_state.FAULT)
+        return -1, err_msg
+    return 0, task_id
 
 
 if __name__ == '__main__':

@@ -238,6 +238,68 @@ def create_db(req):
     return 200, raw_data
 
 
+def create_polardb(req):
+    """
+       创建PolarDB数据库,支持本地存储或共享存储
+       :param req:
+       :return:
+    """
+    params = {
+        'host': csu_http.MANDATORY,         # 主机
+        'port': csu_http.MANDATORY,         # 端口
+        'pgdata': csu_http.MANDATORY,       # 数据目录
+        'instance_name': 0,                 # 名称
+        'os_user': csu_http.MANDATORY,      # 操作系统用户名
+        'pg_bin_path': csu_http.MANDATORY,  # 数据库软件路径
+        'os_uid': csu_http.MANDATORY | csu_http.INT,  # 操作系统用户uid
+        'db_user': csu_http.MANDATORY,      # 数据库用户
+        'db_pass': csu_http.MANDATORY,      # 数据库密码
+        'version': csu_http.MANDATORY,      # 数据库版本
+        'db_type': csu_http.MANDATORY,      # 1代表postgresql,11为polardb
+        'instance_type': csu_http.MANDATORY,  # 数据库创建的类型
+        'setting_list': csu_http.MANDATORY,
+        'pfsdaemon_params': 0,              # pfs 参数
+        'pfs_disk_name': 0,                 # pfs 磁盘名
+        'polar_datadir': 0,                 # polardb 共享盘目录
+    }
+
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    if not pdict['pgdata'].startswith('/'):
+        return 400, f"The args pgdata({pdict['pgdata']}) is not startswith '/', please check."
+    host = pdict['host']
+
+    # check ip and port is used or not
+    err_code, err_msg = pg_helpers.source_check(host, pdict['port'], pdict['pgdata'])
+    if err_code != 0:
+        return 400, err_msg
+
+    err_code, err_msg = rpc_utils.get_rpc_connect(host)
+    if err_code != 0:
+        return 400, f'Host connection failure ({host}),please check service clup-agent is running!'
+    rpc = err_msg
+    rpc.close()
+    try:
+        # if params has pfs_disk_name, build with pfs shared disk
+        if pdict.get('pfs_disk_name'):
+            err_code, err_msg = polar_helpers.create_polardb_with_pfs(pdict)
+            if err_code != 0:
+                return 400, err_msg
+        else:
+            err_code, err_msg = pg_helpers.create_db(pdict)
+            if err_code != 0:
+                return 400, err_msg
+    except Exception as e:
+        return 400, f"create polardb with unexpected error, {str(e)}."
+
+    task_id = err_msg
+    ret_data = {"task_id": task_id}
+    raw_data = json.dumps(ret_data)
+    return 200, raw_data
+
+
 def delete_db(req):
     params = {
         'db_id': csu_http.MANDATORY,  # 数据库id
@@ -449,11 +511,12 @@ def pg_reload(req):
 
 
 def get_all_db_list(req):
-    params = {'page_num': 0,
-              'page_size': 0,
-              'filter': 0,
-              'upper_level_db': 0
-              }
+    params = {
+        'page_num': 0,
+        'page_size': 0,
+        'filter': 0,
+        'upper_level_db': 0
+    }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
     err_code, pdict = csu_http.parse_parms(params, req)
@@ -489,12 +552,14 @@ def get_all_db_list(req):
         row_cnt = rows[0]['cnt']
         ret_rows = []
         if row_cnt > 0:
-            sql = ("SELECT db_id, cluster_id, cluster_type, instance_name, host, is_primary, port,db_state, pgdata, db_type,"
-                   " db_detail->>'instance_type' as instance_type, db_detail->>'version' as version, clup_db.state,up_db_id,"
+            sql = ("SELECT db_id, instance_name, host, is_primary, port, db_state,"
+                   " pgdata, db_type, cluster_id, cluster_type, clup_db.state,up_db_id,"
+                   " db_detail->>'instance_type' as instance_type, db_detail->>'version' as version,"
                    " db_detail->>'os_user' as os_user, cluster_data ->> 'cluster_name' as cluster_name,"
-                   " db_detail->'is_exclusive' as is_exclusive, "
+                   " db_detail->'is_exclusive' as is_exclusive,"
                    " db_detail->>'db_user' as db_user, db_detail->>'db_pass' as db_pass,"
-                   " db_detail->>'repl_user' as repl_user, db_detail->>'repl_pass' as repl_pass"
+                   " db_detail->>'repl_user' as repl_user, db_detail->>'repl_pass' as repl_pass,"
+                   " db_detail->>'polar_type' as polar_type"
                   f" FROM clup_db LEFT JOIN clup_cluster USING (cluster_id) {where_cond} "
                    " ORDER BY cluster_id,db_id LIMIT %(limit)s OFFSET %(offset)s")
             args['limit'] = page_size
@@ -1810,3 +1875,78 @@ def build_polar_standby(req):
     ret_data = {"task_id": task_id, "db_id": db_id}
     raw_data = json.dumps(ret_data)
     return 200, raw_data
+
+
+def get_pfs_info(req):
+    """获取pfs 磁盘信息
+    """
+    params = {
+        'db_id': csu_http.MANDATORY
+    }
+
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    # get the disk info
+    result = polar_lib.get_db_pfs_info(pdict['db_id'])
+    if not result:
+        return 400, f"Cant find any pfs disk information for db(id={pdict['db_id']})."
+
+    pfs_disk_name = result['pfs_disk_name']
+
+    # get the db_info
+    sql = "SELECT host FROM clup_db WHERE db_id = %s"
+    rows = dbapi.query(sql, (pdict['db_id'], ))
+    if not rows:
+        return 400, f"No records were found for db(id={pdict['db_id']})."
+    host = rows[0]['host']
+
+    # get the pfs infor for the pfs_disk_name
+    code, result = polar_lib.get_pfs_info(host, pfs_disk_name)
+    if code != 0:
+        return 400, result
+
+    ret_dict = {
+        "pfs_disk_name": result['pfs_disk_name'],
+        "dev_size": result['dev_size'],
+        "current_size": result['current_chunks'] * 10,
+        "current_chunks": result['current_chunks'],
+        "max_chunks": int(result['dev_size'] / 10)
+    }
+
+    return 200, json.dumps(ret_dict)
+
+
+def pfs_growfs(req):
+    """pfs disk 扩容
+    """
+    params = {
+        "db_id": csu_http.MANDATORY,
+        "pfs_disk_name": csu_http.MANDATORY,
+        "current_chunks": csu_http.INT,
+        "target_chunks": csu_http.INT
+    }
+
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    # get the db infor by db_id
+    rows = dao.get_db_info(pdict['db_id'])
+    if not rows:
+        return 400, f"No records were found for db(id={pdict['db_id']})."
+
+    db_info = {
+        "host": rows[0]['host'],
+        "db_user": rows[0]['db_user'],
+        "db_pass": db_encrypt.from_db_text(rows[0]['db_pass']),
+        "port": rows[0]['port']
+    }
+
+    # growfs disk
+    code, result = polar_lib.pfs_growfs(db_info, pdict['pfs_disk_name'], pdict['current_chunks'], pdict['target_chunks'])
+    if code != 0:
+        return 400, f"Growfs the pfs disk failed, {result}."
+
+    return 200, "Success"

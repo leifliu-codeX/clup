@@ -1382,8 +1382,10 @@ def get_cluster_all_db(req):
     err_code, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 400, pdict
-    sql = "SELECT db_id, up_db_id, host, port, db_state FROM clup_db " \
-          " WHERE cluster_id=%s AND db_id != %s "
+    sql = "SELECT db_id, up_db_id, host, port, db_state," \
+        " db_detail->>'polar_type' as polar_type" \
+        " FROM clup_db " \
+        " WHERE cluster_id=%s AND db_id != %s "
     rows = dbapi.query(sql, (pdict['cluster_id'], pdict['db_id']))
     return 200, json.dumps(rows)
 
@@ -1782,8 +1784,9 @@ def check_pfs_disk_name_validity(req):
 
     code, result = polar_lib.check_pfs_disk_name_validity(pdict['host_list'], pdict['pfs_disk_name'])
     res_data = {
-        'is_valid': True if code == 0 else False,
-        'err_msg': '' if code == 0 else result
+        "is_valid": True if code == 0 else False,
+        "formated": result if code == 0 else 'unknow',
+        "err_msg": '' if code == 0 else result
     }
     ret_data = json.dumps(res_data)
     return 200, ret_data
