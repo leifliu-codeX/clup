@@ -232,7 +232,6 @@ def failover_standby_db(task_id, cluster_id, db_id):
                 task_log_error(task_id, f"{pre_msg}: trigger db({trigger_db_name}) function({trigger_db_func}) in primary error: {err_msg}")
 
         msg = f"{pre_msg}: all commpleted."
-        # leifliu Test
         # task_log_info(task_id, msg)
         # 如果当前坏的备库有下级，则把下级库接到此备库的上级库，当然如果出现了特殊情况，此库没有上级库，则什么页不做
         # 将当前数据库的子节点接到他的上级主库上面
@@ -608,7 +607,6 @@ def failover_polar_primary_db(task_id, cluster_id, db_id):
                 is_failed = True
                 msg = f"{pre_msg}: Unable to configure the reset_cmd command, unable to stop the host({bad_db_host}) of the original primary database, and the execution of {pre_msg} fails."
                 task_log_info(task_id, msg)
-                general_task_mgr.complete_task(task_id, -1, msg)
                 return -1, msg
 
             # 执行reset cmd
@@ -619,13 +617,9 @@ def failover_polar_primary_db(task_id, cluster_id, db_id):
                 task_log_info(task_id, msg)
                 # return -1, msg
 
-            # 从数据库数据cluster_dict取ignore_reset_cmd_return_code参数
-            # if config.getint('ignore_reset_cmd_return_code') == 0:
-            if cluster_dict['ignore_reset_cmd_return_code'] == 0:
-                if err_code != 0:
+                # 从数据库数据cluster_dict取ignore_reset_cmd_return_code参数
+                if cluster_dict['ignore_reset_cmd_return_code'] == 0:
                     msg = f"{pre_msg}: reset host({bad_db_host}) failed"
-                    task_log_info(task_id, msg)
-                    general_task_mgr.complete_task(task_id, -1, msg)
                     return -1, msg
 
     except Exception as e:
@@ -635,7 +629,6 @@ def failover_polar_primary_db(task_id, cluster_id, db_id):
         return -1, msg
     finally:
         if is_failed:
-            general_task_mgr.complete_task(task_id, -1, msg)
             bad_db_dict['state'] = node_state.FAULT
             dao.set_cluster_db_state(cluster_id, db_id, node_state.FAULT)
 

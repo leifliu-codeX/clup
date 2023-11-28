@@ -1077,9 +1077,10 @@ def modify_db_info(req):
     err_code, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 400, pdict
+
     db_id = pdict['db_id']
-    set_sql = ""
     try:
+        set_sql = ""
         if pdict.get('instance_name') is not None:
             set_sql += f"instance_name='{pdict['instance_name']}', "
         if 'repl_ip' in pdict:
@@ -1092,7 +1093,6 @@ def modify_db_info(req):
             set_sql = set_sql.strip().strip(',')  # 去掉最后一个逗号
             sql = f"UPDATE clup_db SET {set_sql} WHERE db_id=%s"
             dbapi.execute(sql, (db_id,))
-
 
         detail_col_list = ['db_user', 'db_pass', 'repl_user', 'repl_pass']
         detail_set_dict = {}
@@ -1108,23 +1108,38 @@ def modify_db_info(req):
             str_all_db_id = str(all_db_id)[1:-1]
             sql = f"UPDATE clup_db SET db_detail = db_detail || (%s::jsonb) WHERE db_id in ({str_all_db_id})"
             dbapi.execute(sql, (json.dumps(detail_set_dict),))
-        # 修改配置文件中的端口
-        if 'repl_ip' in pdict:
-            try:
-                rpc = None
-                err_code, err_msg = rpc_utils.get_rpc_connect(pdict['repl_ip'])
-                if err_code != 0:
-                    return 400, err_msg
-                rpc = err_msg
-                postgresql_conf = f"{pdict['pgdata']}/postgresql.conf"
-                if rpc.os_path_exists(postgresql_conf):
-                    rpc.modify_config_type1(postgresql_conf, {"port": pdict['port']}, is_backup=False)
-                else:
-                    return 400, f"pgdata {pdict['pgdata']} not exists!"
-            except Exception as e:
-                return 400, str(e)
     except Exception as e:
-        return 400, str(e)
+        err_msg = f"Modify the database(db_id={db_id}) information in clup_db with unexpected error, {str(e)}."
+        return 400, err_msg
+
+    # 修改配置文件中的端口
+    rpc = None
+    try:
+        # get the host
+        sql = f"SELECT host in clup_db WHERE db_id = {db_id}"
+        rows = dbapi.query(sql)
+        if not rows:
+            return 400, f"Cant find the information from clup_db,which db_id is {db_id}."
+        host = rows[0]["host"]
+
+        err_code, err_msg = rpc_utils.get_rpc_connect(host)
+        if err_code != 0:
+            return 400, err_msg
+        rpc = err_msg
+        modify_conf_file = f"{pdict['pgdata']}/postgresql.auto.conf"
+        if rpc.os_path_exists(modify_conf_file):
+            modify_conf_file = f"{pdict['pgdata']}/postgresql.conf"
+        if rpc.os_path_exists(modify_conf_file):
+            rpc.modify_config_type1(modify_conf_file, {"port": pdict['port']}, is_backup=False)
+        else:
+            return 400, f"The configuration file({modify_conf_file}) on host({host}) is not exists!"
+    except Exception as e:
+        err_msg = f"Modify the database(db_id={db_id}) port with unexpected error, {str(e)}."
+        return 400, err_msg
+    finally:
+        if rpc:
+            rpc.close()
+
     return 200, 'OK'
 
 
@@ -1816,9 +1831,6 @@ def build_polar_reader(req):
         'sync': csu_http.MANDATORY,
         'other_param': csu_http.MANDATORY,
         'delay': 0,
-        'cpu': 0,
-        'shared_buffers': 0,
-        'tblspc_dir': 0
     }
     # 检查参数的合法性,如果成功,把参数放到一个字典中
     err_code, pdict = csu_http.parse_parms(params, req)
@@ -1828,13 +1840,12 @@ def build_polar_reader(req):
     if not pdict['pgdata'].startswith('/'):
         return 400, 'The args "pgdata" is not startswith "/"'
 
-    err_code, err_msg, task_id, db_id = polar_helpers.build_polar_reader(pdict)
+    err_code, err_msg = polar_helpers.build_polar_standby(pdict, polar_type="reader")
     if err_code != 0:
         return 400, err_msg
 
-    ret_data = {"task_id": task_id, "db_id": db_id}
-    raw_data = json.dumps(ret_data)
-    return 200, raw_data
+    ret_data = json.dumps({"task_id": err_msg})
+    return 200, ret_data
 
 
 def build_polar_standby(req):
@@ -1856,9 +1867,6 @@ def build_polar_standby(req):
         'other_param': csu_http.MANDATORY,
         # "polar_datadir": csu_http.MANDATORY,
         'delay': 0,
-        'cpu': 0,
-        'shared_buffers': 0,
-        'tblspc_dir': 0
     }
     # 检查参数的合法性,如果成功,把参数放到一个字典中
     err_code, pdict = csu_http.parse_parms(params, req)
@@ -1868,13 +1876,12 @@ def build_polar_standby(req):
     if not pdict['pgdata'].startswith('/'):
         return 400, 'The args "pgdata" is not startswith "/"'
 
-    err_code, err_msg, task_id, db_id = polar_helpers.build_polar_standby(pdict)
+    err_code, err_msg = polar_helpers.build_polar_standby(pdict, polar_type="standby")
     if err_code != 0:
         return 400, err_msg
 
-    ret_data = {"task_id": task_id, "db_id": db_id}
-    raw_data = json.dumps(ret_data)
-    return 200, raw_data
+    ret_data = json.dumps({"task_id": err_msg})
+    return 200, ret_data
 
 
 def get_pfs_info(req):

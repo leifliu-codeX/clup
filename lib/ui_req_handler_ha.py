@@ -1516,7 +1516,6 @@ def create_polar_sd_cluster(req):
         'remark': 0,
         'trigger_db_name': 0,
         'trigger_db_func': 0,
-        'reset_cmd': csu_http.MANDATORY,
         'probe_db_name': csu_http.MANDATORY,
         'probe_interval': csu_http.MANDATORY | csu_http.INT,
         'probe_timeout': csu_http.MANDATORY | csu_http.INT,
@@ -1547,7 +1546,7 @@ def create_polar_sd_cluster(req):
     # 定义cluster_data
     cluster_data = pdict.copy()
     del cluster_data['db_list']
-    del cluster_data['reset_cmd']
+    del cluster_data["setting_list"]
     cluster_data['ignore_reset_cmd_return_code'] = pdict.get('ignore_reset_cmd_return_code', 0)
     cluster_data['polar_hostid'] = len(pdict['db_list']) + 1
 
@@ -1560,11 +1559,8 @@ def create_polar_sd_cluster(req):
 
     # 插入集群表
     sql = "INSERT INTO clup_cluster(cluster_type, cluster_data,state,lock_time) " \
-          "VALUES (%s, %s, %s, %s) RETURNING cluster_id"
-    # 不要把setting_list存入数据库
-    cluster_data_to_db = cluster_data.copy()
-    del cluster_data_to_db['setting_list']
-    rows = dbapi.query(sql, (11, json.dumps(cluster_data_to_db), 0, 0))
+        "VALUES (%s, %s, %s, %s) RETURNING cluster_id"
+    rows = dbapi.query(sql, (11, json.dumps(cluster_data), 0, 0))
     if len(rows) == 0:
         return 400, 'Failed to add the database to the cluster.'
 
