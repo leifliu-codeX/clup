@@ -537,10 +537,7 @@ def failback(task_id: int, db_dict, restore_cluster_state):
             pdict['unix_socket_dir'] = unix_socket_dir
 
             if cluster_type == 11:
-                if polar_type == "reader":
-                    err_code, err_msg = polar_helpers.repair_build_polar_reader(task_id, failback_host, db_id, pdict)
-                elif polar_type == "standby":
-                    err_code, err_msg = polar_helpers.repair_build_polar_standby(task_id, failback_host, db_id, pdict)
+                err_code, err_msg = polar_helpers.repair_polar_standby(task_id, pdict, polar_type)
             else:
                 err_code, err_msg = long_term_task.build_pg_standby(task_id, failback_host, db_id, pdict)
             if err_code != 0:

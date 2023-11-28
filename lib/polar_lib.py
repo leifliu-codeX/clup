@@ -169,32 +169,6 @@ class PolarCommon:
             self.rpc.config_file_set_tag_content(pg_ident_conf_file, tag_line, content)
         return 0, 'Successfully configured pg_hba.conf.'
 
-    # Delete Next: 修改流复制配置,暂时指定为recovery.conf
-    # def edit_repl_conf(self):
-    #     rpc = self.rpc
-    #     version = self.rpc_dict['version']
-    #     pgdata = self.rpc_dict['pgdata']
-    #     up_db_repl_ip = self.rpc_dict['up_db_repl_ip']
-    #     repl_user = self.rpc_dict['repl_user']
-    #     repl_pass = self.rpc_dict["repl_pass"]
-    #     up_db_port = self.rpc_dict["up_db_port"]
-    #     primary_slot_name = self.rpc_dict["primary_slot_name"]
-    #     repl_app_name = self.rpc_dict['repl_app_name']
-    #     recovery_min_apply_delay = self.rpc_dict.get('recovery_min_apply_delay', None)
-    #     pg_major_int_version = int(str(version).split('.')[0])
-    #     err_code, err_msg = set_sr_config_file(
-    #         rpc,
-    #         pg_major_int_version,
-    #         repl_user, repl_pass,
-    #         up_db_repl_ip,
-    #         up_db_port,
-    #         repl_app_name,
-    #         pgdata,
-    #         primary_slot_name,
-    #         recovery_min_apply_delay
-    #     )
-    #     return err_code, err_msg
-
     # 添加插件
     def create_extension(self):
         setting_dict = self.rpc_dict["setting_dict"]
@@ -219,22 +193,6 @@ class PolarCommon:
         err_code = self.rpc.run_cmd(cmd_start_pfsdaemon)
         return err_code, ''
 
-    # Delete Next: 创建复制槽
-    # def create_repl(self):
-    #     db_name = 'postgres'
-    #     primary_slot_name_list = self.rpc_dict.get("primary_slot_name")
-    #     if not primary_slot_name_list:
-    #         return 1, "There is no slot need to create in primary."
-    #     sql = ''
-    #     for slot_name in primary_slot_name_list:
-    #         sql = sql + f"select pg_create_physical_replication_slot('{slot_name}');"
-    #     cmd = f"""su - {self.os_user} -c "psql -U {self.db_user} -p {self.port} -d {db_name}  -c \\"{sql}\\" " """
-    #     err_code, err_msg, _out_msg = self.rpc.run_cmd_result(cmd)
-    #     if err_code != 0:
-    #         err_msg = f"run cmd: {cmd} failed: {err_msg}"
-    #         return err_code, err_msg
-    #     return err_code, err_msg
-
     # 创建pfs共享文件夹
     def mk_share_dir(self):
         pfs_disk_name = self.rpc_dict["pfs_disk_name"]
@@ -253,23 +211,10 @@ class PolarCommon:
         up_db_port = self.rpc_dict["up_db_port"]
         up_db_repl_ip = self.rpc_dict["up_db_repl_ip"]
 
-        # 表空间参数
         other_param = self.rpc_dict.get('other_param')
-        tbl_list = self.rpc_dict.get('tblspc_dir')
-        tblspc_str = ''
-        if tbl_list:
-            tblspc_str = "--format=p "
-            try:
-                for k in tbl_list:
-                    tblspc_str += f""" -T "{k['old_dir']}"="{k['new_dir']}" """
-            except Exception as e:
-                err_code = -1
-                err_msg = str(e)
-                return err_code, err_msg
-        other_param = self.rpc_dict["other_param"]
         other_param = ' -P -Xs ' if not other_param else other_param
 
-        param = f'polar_basebackup -h{up_db_repl_ip} -p{up_db_port} -U{repl_user} -D {self.pgdata} {tblspc_str} {other_param}'
+        param = f'polar_basebackup -h{up_db_repl_ip} -p{up_db_port} -U{repl_user} -D {self.pgdata} {other_param}'
         cmd = f"""su  - {self.os_user} -c "{param}" """
         cmd_id = self.rpc.run_long_term_cmd(cmd, output_qsize=10, output_timeout=600)
         state = 0
@@ -395,6 +340,21 @@ def stop_pfs(host, db_id=None, pfs_dict=None):
         if rpc:
             rpc.close()
     return 0, "no pfs running"
+
+
+def get_up_db_info(up_db_id):
+    sql = "SELECT db_id, up_db_id, state, host, cluster_id, port, pgdata," \
+        " db_type, repl_app_name, repl_ip, db_detail->>'delay' as delay," \
+        " db_detail->>'db_user' as db_user, db_detail->>'db_pass' as db_pass," \
+        " db_detail->>'os_user' as os_user, db_detail->>'instance_type' as instance_type,"\
+        " db_detail->'repl_ip' as repl_ip_in_detail, db_detail->'repl_user' as repl_user, "\
+        " db_detail->'repl_pass' as repl_pass, db_detail->>'pfs_disk_name' as pfs_disk_name," \
+        " db_detail->>'polar_datadir' as polar_datadir, db_detail->>'pfsdaemon_params' as pfsdaemon_params" \
+        " FROM clup_db WHERE db_id = %s "
+    rows = dbapi.query(sql, (up_db_id, ))
+    if not rows:
+        return None
+    return rows[0]
 
 
 def init_polar_reader(rpc, rpc_dict):
@@ -551,11 +511,9 @@ def edit_standby_postgresql_conf(rpc, rpc_dict):
     """配置备库的postgresql.conf
     """
     pgdata = rpc_dict["pgdata"]
-    polar_datadir = rpc_dict.get('polar_datadir', None)
 
     try:
-        if not polar_datadir:
-            polar_datadir = f"{pgdata}/polar_shared_data"
+        polar_datadir = f"{pgdata}/polar_shared_data"
         standby_setting_dict = {
             "port": rpc_dict["port"],
             "polar_hostid": rpc_dict["polar_hostid"],
@@ -576,7 +534,7 @@ def edit_standby_postgresql_conf(rpc, rpc_dict):
         rpc.modify_config_type1(postgresql_conf, setting_dict, is_backup=False)
     except Exception:
         return -1, traceback.format_exc()
-    return 0, "Successfully modified 'postgresql.conf' file"
+    return 0, "Successfully modified postgresql.conf file."
 
 
 def edit_standby_conf(rpc, pgdata, repl_app_name, repl_user, up_db_repl_ip, up_db_port, polar_hostid):
@@ -649,9 +607,9 @@ def create_replication_slot(rpc_dict, slot_name):
     """在主库中创建复制槽
     """
     db_name = 'template1'
-    os_user = rpc_dict["os_user"]
     db_user = rpc_dict["db_user"]
     port = rpc_dict["up_db_port"]
+    os_user = rpc_dict["up_db_os_user"]
     up_db_host = rpc_dict["up_db_host"]
     try:
         rpc = None
@@ -661,10 +619,10 @@ def create_replication_slot(rpc_dict, slot_name):
             return err_code, err_msg
         rpc = err_msg
         sql = f"select pg_create_physical_replication_slot('{slot_name}');"
-        cmd = f"""su - {os_user} -c "psql  -U {db_user} -p {port} -d {db_name} -c \\"{sql}\\" " """
+        cmd = f"""su - {os_user} -c "psql -U {db_user} -p {port} -d {db_name} -c \\"{sql}\\" " """
         err_code, err_msg, _out_msg = rpc.run_cmd_result(cmd)
         if err_code != 0:
-            err_msg = f"run cmd: {cmd} failed: {err_msg}"
+            err_msg = f"run cmd({cmd}) failed, {err_msg}."
             return err_code, err_msg
     except Exception:
         return -1, traceback.format_exc()
@@ -1111,7 +1069,10 @@ def get_cluster_polar_hostid(cluster_id):
     rows = dbapi.query(sql)
     if not len(rows):
         return -1, f"Failed to get the 'polar_hostid' of the cluster(cluster_id={cluster_id})."
-    return 0, rows[0]
+    polar_hostid = rows[0].get("polar_hostid")
+    if not polar_hostid:
+        return -1, f"Failed to get polar_hostid, please modify the polar_hostid for the cluster(cluster_id={cluster_id}) information first."
+    return 0, int(polar_hostid)
 
 
 def update_cluster_polar_hostid(cluster_id, polar_hostid):
@@ -1230,77 +1191,6 @@ def polar_share_to_local(task_id, msg_prefix, recovery_host, pgdata):
             rpc.close()
 
     return 0, "success"
-
-
-def polar_local_to_share(task_id, msg_prefix, pdict):
-    """move polar_local_data to shared_data
-    """
-    step = f"{msg_prefix} init polardb"
-    err_code, err_msg = rpc_utils.get_rpc_connect(pdict["recovery_host"])
-    if err_code != 0:
-        err_msg = f"Cant connect the host({pdict['recovery_host']}), {err_msg}."
-        general_task_mgr.log_error(task_id, err_msg)
-        return -1, err_msg
-    rpc = err_msg
-
-    pgdata = pdict["pgdata"]
-    pg_bin_path = pdict["recovery_pg_bin_path"]
-
-    # check pgdata is exixts
-    general_task_mgr.log_info(task_id, f"{step}: Chick directories...")
-    result = rpc.os_path_exists(pgdata)
-    if not result:
-        err_msg = f"{step}: the directory {pgdata} is not exists."
-        general_task_mgr.log_error(task_id, err_msg)
-        return -1, err_msg
-
-    # check or create shared_data
-    shared_data_path = f"/{pdict['pfs_disk_name']}/{pdict['shared_data']}/"
-    mkdir_cmd = f"pfs -C disk mkdir {shared_data_path}"
-    err_code, err_msg, _out_msg = rpc.run_cmd_result(mkdir_cmd)
-    if err_code != 0 and err_code != 255:
-        err_msg = f"{step}: run cmd {mkdir_cmd} failed, {err_msg}."
-        general_task_mgr.log_error(task_id, err_msg)
-        return -1, err_msg
-    general_task_mgr.log_info(task_id, f"{step}: Chick directories success.")
-
-    try:
-        # cp *.conf file to polar_shared_data
-        general_task_mgr.log_info(task_id, f"{step}: Start cp files...")
-        cp_files = f"cd {pgdata} && cp *.conf polar_shared_data/"
-        err_code, err_msg, _out_msg = rpc.run_cmd_result(cp_files)
-        if err_code != 0:
-            err_msg = f"{step}: run cmd {cp_files} failed, {err_msg}."
-            general_task_mgr.log_error(task_id, err_msg)
-            return -1, err_msg
-        general_task_mgr.log_info(task_id, f"{step}: cp files success.")
-
-        # mv files to shared_data
-        general_task_mgr.log_info(task_id, f"{step}: Start move files...")
-        polar_initdb = os.path.join(pg_bin_path, "polar-initdb.sh")
-        mv_base_file = f"{polar_initdb} {pgdata}/polar_shared_data/ {shared_data_path}"
-        err_code, err_msg, _out_msg = rpc.run_cmd_result(mv_base_file)
-        if err_code != 0:
-            err_msg = f"{step}: run cmd {mv_base_file} failed, {err_msg}."
-            general_task_mgr.log_error(task_id, err_msg)
-            return -1, err_msg
-        general_task_mgr.log_info(task_id, f"{step}: Move files success.")
-
-        # delete directory polar_shared_data
-        general_task_mgr.log_info(task_id, f"{step}: Start delete polar_shared_data...")
-        delete_base_files = f"cd {pgdata} && rm -rf polar_shared_data"
-        err_code, err_msg, _out_msg = rpc.run_cmd_result(delete_base_files)
-        if err_code != 0:
-            err_msg = f"{step}: run cmd {mv_base_file} failed, {err_msg}."
-            general_task_mgr.log_error(task_id, err_msg)
-            return -1, err_msg
-        general_task_mgr.log_info(task_id, f"{step}: Delete extra files success.")
-
-        return 0, "success"
-    except Exception:
-        err_msg = f"{step}: failed with unexcept error, {traceback.format_exc()}"
-        general_task_mgr.log_error(task_id, err_msg)
-        return -1, err_msg
 
 
 def disable_settings(rpc, file, remove_conf_list):

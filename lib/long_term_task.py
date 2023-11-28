@@ -257,7 +257,6 @@ def task_create_pg_db(task_id, host, db_id, rpc_dict):
 
     if err_code == 0:
         task_state = 1
-        # leifliu Test
         err_msg = "Success"
     else:
         task_state = -1
@@ -819,7 +818,6 @@ def task_create_sr_cluster(task_id, cluster_id, rpc_dict):
     err_code, err_msg = create_sr_cluster(task_id, cluster_id, rpc_dict)
     if err_code == 0:
         task_state = 1
-        # leifliu Test
         err_msg = "Success"
     else:
         task_state = -1
@@ -968,15 +966,6 @@ def create_polardb(task_id, host, db_id, rpc_dict):
             return err_code, err_msg
         general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        # Delete Next
-        # step = 'Create a replication slot in database'
-        # general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
-        # err_code, err_msg = polarCommon.create_repl()
-        # if err_code != 0 and err_code != 1:
-        #     return err_code, err_msg
-        # elif err_code == 1:
-        #     return 0, err_msg
-        # general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
         return 0, ''
     except Exception:
         err_code = -1
@@ -1019,13 +1008,13 @@ def task_create_polardb(task_id, rpc_dict):
         general_task_mgr.complete_task(task_id, task_state, ret_msg)
 
 
-def build_polar_reader(task_id, host, db_id, rpc_dict):
+def build_polar_reader(task_id, rpc_dict):
     """搭建polardb共享存储reader节点
     Args:
         task_id ([type]): [description]
         db_dict ([type]): [description]
     """
-    msg_prefix = f"Create pg(db_id={db_id}) on {host}"
+    msg_prefix = f"Create pg(db_id={rpc_dict['db_id']}) on {rpc_dict['host']}"
 
     try:
         step = 'Check the parameters for creating the database'
@@ -1040,10 +1029,10 @@ def build_polar_reader(task_id, host, db_id, rpc_dict):
         }
         general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        step = f'Connect to host({host})'
+        step = f"Connect to host({rpc_dict['host']})"
         rpc = None
         general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
-        err_code, err_msg = rpc_utils.get_rpc_connect(host)
+        err_code, err_msg = rpc_utils.get_rpc_connect(rpc_dict['host'])
         if err_code != 0:
             return -1, err_msg
         rpc = err_msg
@@ -1119,8 +1108,8 @@ def build_polar_reader(task_id, host, db_id, rpc_dict):
         general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
         step = 'Configuration recovery.conf'
-        repl_app_name = rpc_dict['repl_app_name']
         polar_hostid = rpc_dict["polar_hostid"]
+        repl_app_name = rpc_dict.get("repl_app_name", rpc_dict["repl_ip"])
         general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         err_code, err_msg = polar_lib.edit_reader_conf(
             rpc,
@@ -1154,8 +1143,8 @@ def build_polar_reader(task_id, host, db_id, rpc_dict):
         return 0, 'Create polar reader database success'
     except Exception:
         err_msg = f"{msg_prefix}: {step} with unexpected error, {traceback.format_exc()}."
-        general_task_mgr.log_error(task_id, err_msg)
         logging.error(err_msg)
+        general_task_mgr.log_error(task_id, err_msg)
         return -1, err_msg
     finally:
         if polarCommon:
@@ -1164,8 +1153,8 @@ def build_polar_reader(task_id, host, db_id, rpc_dict):
             rpc.close()
 
 
-def build_polar_standby(task_id, host, db_id, rpc_dict):
-    msg_prefix = f"Build standby(db_id={db_id} on {host})"
+def build_polar_standby(task_id, rpc_dict):
+    msg_prefix = f"Build standby(db_id={rpc_dict['db_id']} on {rpc_dict['host']})"
 
     try:
         step = 'Check the parameters for creating a standby database'
@@ -1185,9 +1174,9 @@ def build_polar_standby(task_id, host, db_id, rpc_dict):
         }
         general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        step = f'Connect to host: {host}'
+        step = f"Connect to host: {rpc_dict['host']}"
         general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
-        err_code, err_msg = rpc_utils.get_rpc_connect(host)
+        err_code, err_msg = rpc_utils.get_rpc_connect(rpc_dict['host'])
         if err_code != 0:
             return -1, err_msg
         rpc = err_msg
@@ -1220,7 +1209,7 @@ def build_polar_standby(task_id, host, db_id, rpc_dict):
             return err_code, err_msg
         general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
-        step = 'Prepare .pgpass for pg_basebackup'
+        step = 'Prepare .pgpass for polar_basebackup'
         general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         err_code, err_msg = pg_db_lib.dot_pgpass_add_item(
             rpc, db_info['os_user'], up_db_repl_ip, up_db_port, 'replication', repl_user, repl_pass,
@@ -1251,8 +1240,8 @@ def build_polar_standby(task_id, host, db_id, rpc_dict):
         general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
         step = 'Configuration recovery.conf'
-        repl_app_name = rpc_dict['repl_app_name']
         polar_hostid = rpc_dict["polar_hostid"]
+        repl_app_name = rpc_dict.get("repl_app_name", rpc_dict["repl_ip"])
         general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         err_code, err_msg = polar_lib.edit_standby_conf(
             rpc,
@@ -1279,8 +1268,9 @@ def build_polar_standby(task_id, host, db_id, rpc_dict):
         step = 'Start database'
         general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         err_code, err_msg = pg_db_lib.start(rpc, rpc_dict['pgdata'])
-        if err_code < 0:
-            err_msg = f'start pg db error: {err_msg}'
+        if err_code != 0:
+            err_msg = f'Create database success, but start database failed, {err_msg}, please check.'
+            # just start failed, create is success, so return 0
             return 0, err_msg
         general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
@@ -1324,22 +1314,20 @@ def create_polar_sd_cluster(task_id, cluster_id, pdict):
             'repl_user': pdict['repl_user'],
             'repl_pass': pdict['repl_pass'],
             'version': pri_dict['version'],
+            "polar_hostid": 1,
             'polar_type': 'master',
             'pfs_disk_name': pdict['pfs_disk_name'],
             'polar_datadir': pdict["polar_datadir"],
             'pfsdaemon_params': pdict['pfsdaemon_params'],
             'reset_cmd': pri_dict['reset_cmd']
         }
-        db_detail['os_user'] = pri_dict['os_user']
-        db_detail['os_uid'] = pri_dict['os_uid']
-        db_detail['pg_bin_path'] = pri_dict['pg_bin_path']
-
-        pri_dict['repl_app_name'] = pri_dict['repl_ip']
-        pri_dict['cluster_id'] = cluster_id
-        db_detail['polar_hostid'] = 1
         pri_dict['db_detail'] = json.dumps(db_detail)
+
+        # database in cluster state
         pri_dict['state'] = 1
         pri_dict['is_primary'] = 1
+        pri_dict['cluster_id'] = cluster_id
+        pri_dict['repl_app_name'] = pri_dict['repl_ip']
         pri_dict['db_state'] = database_state.CREATING
         pri_dict['db_type'] = int(pdict['db_type'])
 
@@ -1399,7 +1387,7 @@ def create_polar_sd_cluster(task_id, cluster_id, pdict):
                 # 是主库就跳过
                 continue
 
-            general_task_mgr.log_info(task_id, f"{pre_msg}: Start building standby on {db['host']}")
+            general_task_mgr.log_info(task_id, f"{pre_msg}: Start building reader on {db['host']}")
             # db_dict存储搭建备库需要的参数
             db_dict = {}
             db_dict.update(db)
@@ -1448,11 +1436,12 @@ def create_polar_sd_cluster(task_id, cluster_id, pdict):
 
             # 开始搭备库
             # rpc_dict 放下创建备库的调用的参数
-            rpc_dict = {}
+            rpc_dict = dict()
             rpc_dict['db_id'] = db_id
             rpc_dict['up_db_id'] = primary_db_id
             rpc_dict['up_db_host'] = pri_dict['host']
             rpc_dict['up_db_port'] = pdict['port']
+            rpc_dict["up_db_os_user"] = pri_dict["os_user"]
             rpc_dict['up_db_pgdata'] = pri_dict['pgdata']
             rpc_dict['up_db_repl_ip'] = pri_dict['repl_ip']
             rpc_dict['os_user'] = db['os_user']
@@ -1462,6 +1451,7 @@ def create_polar_sd_cluster(task_id, cluster_id, pdict):
             rpc_dict['pg_bin_path'] = db['pg_bin_path']
             rpc_dict['pgdata'] = db['pgdata']
             rpc_dict['db_user'] = pdict['db_user']   # 数据库用户，当db_user与os_user不相同时，需要在pg_hba.conf中加用户映射
+            rpc_dict["repl_ip"] = db["host"]
             rpc_dict['repl_user'] = pdict['repl_user']
             rpc_dict['repl_pass'] = pdict['repl_pass']
             rpc_dict['delay'] = 0
@@ -1483,7 +1473,7 @@ def create_polar_sd_cluster(task_id, cluster_id, pdict):
                 rpc_dict["instance_name"] = db['host']
 
             # 开始搭建备库,使用简化流程
-            err_code, err_msg = build_polar_reader(task_id, rpc_dict['host'], rpc_dict['db_id'], rpc_dict)
+            err_code, err_msg = build_polar_reader(task_id, rpc_dict)
             if err_code != 0:
                 dao.update_db_state(rpc_dict['db_id'], database_state.FAULT)
                 err_msg = f"{pre_msg}: Database creation failure: {err_msg}"
@@ -1495,6 +1485,8 @@ def create_polar_sd_cluster(task_id, cluster_id, pdict):
     except Exception:
         err_code = -1
         err_msg = traceback.format_exc()
+        dao.update_db_state(rpc_dict['db_id'], database_state.FAULT)
+        return -1, err_msg
 
 
 def task_create_polar_sd_cluster(task_id, cluster_id, rpc_dict):
@@ -1507,15 +1499,15 @@ def task_create_polar_sd_cluster(task_id, cluster_id, rpc_dict):
     general_task_mgr.complete_task(task_id, task_state, err_msg)
 
 
-def task_build_polar_standby(task_id, host, db_id, rpc_dict):
-    err_code, err_msg = build_polar_standby(task_id, host, db_id, rpc_dict)
+def task_build_polar_standby(task_id, rpc_dict):
+    err_code, err_msg = build_polar_standby(task_id, rpc_dict)
     # 创建完成后更新clup_db中的状态
     if err_code == 0:
         db_state = database_state.RUNNING
     else:
         db_state = database_state.FAULT
     try:
-        dao.update_db_state(db_id, db_state)
+        dao.update_db_state(rpc_dict["db_id"], db_state)
     except Exception as e:
         logging.error(f"dao.update_db_state failed: {repr(e)}")
 
@@ -1527,18 +1519,17 @@ def task_build_polar_standby(task_id, host, db_id, rpc_dict):
     general_task_mgr.complete_task(task_id, task_state, err_msg)
 
 
-# leifliu Test 构建polardb 共享存储只读库
-def task_build_polar_reader(task_id, host, db_id, rpc_dict):
-    err_code, err_msg = build_polar_reader(task_id, host, db_id, rpc_dict)
+def task_build_polar_reader(task_id, rpc_dict):
+    err_code, err_msg = build_polar_reader(task_id, rpc_dict)
     # 创建完成后更新clup_db中的状态
     if err_code == 0:
         db_state = database_state.RUNNING
     else:
         db_state = database_state.FAULT
     try:
-        dao.update_db_state(db_id, db_state)
+        dao.update_db_state(rpc_dict["db_id"], db_state)
     except Exception as e:
-        logging.error(f"dao.update_db_state failed: {repr(e)}")
+        logging.error(f"dao.update_db_state failed: {repr(e)}.")
 
     if err_code == 0:
         task_state = 1
