@@ -146,7 +146,6 @@ def create_db(pdict):
         pdict['is_primary'] = 1
         pdict['instance_name'] = instance_name
         pdict['db_state'] = db_state
-        # leifliu Test
         pdict['repl_app_name'] = pdict['host']
         pdict['repl_ip'] = pdict['host']
         # add repl_app_name, repl_ip
@@ -225,7 +224,7 @@ def build_standby(pdict):
             return -1, 'the primary database instance does not exist. Please try again'
         if rows[0]['cluster_id'] and rows[0]['state'] == 1:
             return -1, f"The primary database is in the cluster[cluster_id: {rows[0]['cluster_id']}]. Please take it offline before performing operations."
-        # leifliu Test 更新上级库信息,添加repl_user、repl_pass
+        # 更新上级库信息,添加repl_user、repl_pass
         update_dict = json.dumps({"repl_user": pdict['repl_user'], "repl_pass": pdict['repl_pass']})
         sql = "UPDATE clup_db SET db_detail = db_detail || (%s::jsonb) WHERE db_id = %s"
         dbapi.execute(sql, (update_dict, pdict['up_db_id']))
@@ -236,7 +235,6 @@ def build_standby(pdict):
             return err_code, f"The configuration of the primary database could not be obtained: {err_msg}"
         up_db_dict['setting_list'] = err_msg
 
-        # leifliu Test
         # 检查上级主库中安装的插件,如果要搭建的备库的数据库目录中没有此插件,则报错返回
         setting_dict = pg_setting_list_to_dict(up_db_dict["setting_list"])
         plug_str = setting_dict.get('shared_preload_libraries', '')

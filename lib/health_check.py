@@ -425,7 +425,6 @@ class ClusterChangeChecker(threading.Thread):
                     if cluster_type == 1:
                         db_checker = SrHaChecker(cluster_id)
                         db_checker.start()
-                    # Leifliu Test
                     elif cluster_type == 11:
                         db_checker = SrHaChecker(cluster_id)
                         db_checker.start()

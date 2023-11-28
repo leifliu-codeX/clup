@@ -74,7 +74,7 @@ def get_host_list(req):
                 attr_dict.pop('ip', None)
                 row.update(attr_dict)
 
-    # leifliu 添加机器状态查询，只查询Down掉的机器
+    # 添加机器状态查询，只查询Down掉的机器
     down_rows = []
     for row in ret_rows:
         err_code, err_msg = rpc_utils.get_rpc_connect(row['ip'], conn_timeout=2)

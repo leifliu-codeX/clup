@@ -561,7 +561,6 @@ def get_primary_info(cluster_id):
 
 
 def get_db_state(db_id):
-    # leifliu Test: sql-add db_state
     sql = """
     SELECT db_state, state, is_primary FROM clup_db WHERE db_id= %s
     """
