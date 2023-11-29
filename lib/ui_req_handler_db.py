@@ -708,6 +708,7 @@ def modify_db_conf(req):
         'setting_value': csu_http.MANDATORY,
         'setting_unit': csu_http.MANDATORY,
         'is_reload': csu_http.MANDATORY,
+        'current_value': 0,
         'need_sync': 0
     }
     # 检查参数的合法性,如果成功,把参数放到一个字典中
@@ -724,9 +725,15 @@ def modify_db_conf(req):
     err_code, err_msg = pg_helpers.modify_db_conf(pdict)
     if err_code != 0:
         return 400, err_msg
-    # 这三个参数备库数值不小于主库,修改主库直接同步修改备库
-    if pdict['setting_name'] in ['max_connections', 'max_prepared_transactions', 'max_worker_processes']:
-        pdict['need_sync'] = 1
+
+    # 这四个参数备库数值不小于主库
+    need_check_settings = ['max_connections', 'max_prepared_transactions', 'max_worker_processes', 'max_locks_per_transaction']
+    # if modify
+    if not pdict.get("need_sync"):
+        if pdict['setting_name'] in need_check_settings:
+            if int(pdict["setting_value"]) > int(pdict["current_value"]):
+                pdict['need_sync'] = 1
+
     # 不同步修改直接返回
     if not pdict.get('need_sync'):
         return 200, json.dumps({"msg": "primary database parameter modification completed."})
@@ -755,8 +762,7 @@ def modify_db_conf(req):
 
 
 def get_db_settings(req):
-    """
-        获取pg数据库对应的所有配置
+    """获取pg数据库对应的所有配置
     """
     params = {
         'db_id': csu_http.MANDATORY,
@@ -765,7 +771,8 @@ def get_db_settings(req):
         'setting_name': 0,
         'setting_category': 0,
         'setting_context': 0,
-        'setting_vartype': 0
+        'setting_vartype': 0,
+        'no_show_params': 0
     }
     # 检查参数的合法性,如果成功,把参数放到一个字典中
     err_code, pdict = csu_http.parse_parms(params, req)
@@ -776,22 +783,35 @@ def get_db_settings(req):
     db_id = pdict['db_id']
     page_num = pdict['page_num']
     page_size = pdict['page_size']
-    input_setting_name = pdict.get('setting_name', 0)
-    input_category = pdict.get('setting_category', 0)
-    input_context = pdict.get('setting_context', 0)
-    input_vartype = pdict.get('setting_vartype', 0)
-    # 查询数据库对应的hid
-    sql_get_hid = f"SELECT db_state, hid FROM clup_db as d, clup_host as h WHERE d.host=h.ip AND d.db_id={db_id}"
-    hid_rows = dbapi.query(sql_get_hid)
-    if not hid_rows:
-        return 400, f"No database db_id={db_id} hid information can be queried!"
-    db_state = hid_rows[0]['db_state']
-    # 需要启动数据库后,才能修改配置参数
-    if db_state != 0:
-        return 400, f"The database: db_id={db_id} not started, modify the parameters after starting the database."
+    condition_dict = {
+        "name": pdict.get('setting_name', 0),
+        "category": pdict.get('setting_category', 0),
+        "context": pdict.get('setting_context', 0),
+        "vartype": pdict.get('setting_vartype', 0),
+        "no_show": pdict.get("no_show_params", 0)
+    }
 
-    condition_dict = {"name": input_setting_name, "category": input_category, "context": input_context, "vartype": input_vartype}
-    err_code, err_msg = pg_helpers.get_all_settings(db_id, condition_dict)
+    # 查询数据库对应的hid
+    sql = f"SELECT db_state, hid, d.host, d.pgdata, d.db_detail->'version' as version" \
+        f" FROM clup_db as d, clup_host as h WHERE d.host=h.ip AND d.db_id={db_id}"
+    rows = dbapi.query(sql)
+    if not rows:
+        return 400, f"No database db_id={db_id} hid information can be queried!"
+    db_dict = rows[0]
+    # db_state = db_dict['db_state']
+
+    pg_version = None
+    code, is_run = pg_db_lib.is_running(db_dict['host'], db_dict['pgdata'])
+    if code == 0:
+        if not is_run:
+            # the database is not running
+            pg_version = int(float(db_dict["version"]))
+
+    # 需要启动数据库后,才能修改配置参数
+    # if db_state != 0:
+    #     return 400, f"The database: db_id={db_id} not started, modify the parameters after starting the database."
+
+    err_code, err_msg = pg_helpers.get_all_settings(db_id, condition_dict, pg_version)
     if err_code != 0:
         return 400, err_msg
     all_settings_list = err_msg
@@ -824,19 +844,29 @@ def get_all_setting_category(req):
         if err_code != 0:
             return 400, pdict
         db_id = pdict['db_id']
-        # 查询数据库对应的hid
-        sql_get_hid = f"SELECT db_state, hid FROM clup_db as d, clup_host as h WHERE d.host=h.ip AND d.db_id={db_id}"
-        hid_rows = dbapi.query(sql_get_hid)
-        if not hid_rows:
-            return 400, f"No database db_id={db_id} hid information can be queried!"
-        db_state = hid_rows[0]['db_state']
 
-        # 需要启动数据库后,才能修改配置参数
-        if db_state != 0:
-            return 400, f"The database: db_id={db_id} not started, modify the parameters after starting the database."
+        # get the database information
+        sql = f"SELECT db_state, hid, d.host, d.pgdata, d.db_detail->'version' as version" \
+            f" FROM clup_db as d, clup_host as h WHERE d.host=h.ip AND d.db_id={db_id}"
+        rows = dbapi.query(sql)
+        if not rows:
+            return 400, f"No database db_id={db_id} hid information can be queried!"
+        db_dict = rows[0]
+        # db_state = db_dict['db_state']
+
+        pg_version = None
+        code, is_run = pg_db_lib.is_running(db_dict['host'], db_dict['pgdata'])
+        if code == 0:
+            if not is_run:
+                # the database is not running
+                pg_version = int(float(db_dict["version"]))
+
+        # # 需要启动数据库后,才能修改配置参数
+        # if db_state != 0:
+        #     return 400, f"The database: db_id={db_id} not started, modify the parameters after starting the database."
 
         # 获取分类
-        err_code, err_msg = pg_helpers.get_all_settings(db_id, {})
+        err_code, err_msg = pg_helpers.get_all_settings(db_id, {}, pg_version)
         if err_code != 0:
             return 400, err_msg
 
