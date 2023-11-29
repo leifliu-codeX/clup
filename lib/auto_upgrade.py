@@ -70,6 +70,7 @@ upgrade_func_list = [
     ["5.0.0", upgrade_common],
     ['5.0.1', upgrade_common],
     ['5.0.2', upgrade_common],
+    ['5.0.4', upgrade_common],
 ]
 
 

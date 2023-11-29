@@ -27,7 +27,6 @@ import json
 import logging
 # agent_log
 import math
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import agent_logger
 import config
@@ -36,6 +35,10 @@ import dbapi
 import ip_lib
 import logger
 import rpc_utils
+
+from pg_db_lib import is_running
+from pg_helpers import get_all_settings
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 def get_clup_host_list(req):
@@ -327,6 +330,115 @@ def update_clup_settings(req):
     config.set_key(pdict['key'], pdict['content'])
 
     return 200, 'Update success'
+
+
+def get_pg_settings(req):
+    """检查各版本的数据库默认参数
+    """
+    params = {
+        'page_num': 0,
+        'page_size': 0,
+        'pg_version': 0,
+        'filter': 0,
+    }
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    # get all pg version are setted or not
+    sql = "SELECT DISTINCT(pg_version), COUNT(*) FROM clup_pg_settings group by pg_version"
+    rows = dbapi.query(sql)
+    setted_dict = {
+        9: False,
+        10: False,
+        11: False,
+        12: False,
+        13: False,
+        14: False
+    }
+    for row in rows:
+        setted_dict[row["pg_version"]] = True
+
+    ret_dict = {
+        "setted_info": setted_dict
+    }
+    # get follow version db infor
+    try:
+        if pdict.get("pg_version"):
+            search_sql = "SELECT DISTINCT(db_id), host, pgdata, db_detail->>'version' as version FROM clup_db"
+            if pdict.get("filter"):
+                where_cond = """ WHERE FLOOR((db_detail->>'version')::numeric) = %(pg_version)s
+                AND cast(db_id AS varchar) like %(filter)s OR host like %(filter)s group by db_id
+                """
+            else:
+                where_cond = "WHERE FLOOR((db_detail->>'version')::numeric) = %(pg_version)s group by db_id"
+
+            # search result and pages set
+            pdict['offset'] = (pdict['page_num'] - 1) * pdict['page_size']
+            page_cond = " ORDER BY db_id OFFSET %(offset)s LIMIT %(page_size)s"
+            rows = dbapi.query(f"{search_sql} {where_cond} {page_cond}", pdict)
+            if not rows:
+                return 400, f"No records were found for pg_version={pdict['pg_version']}."
+
+            # just return the database which is running
+            ret_dict["db_info_list"] = list()
+            for row in rows:
+                code, is_run = is_running(row["host"], row['pgdata'])
+                if code != 0 or not is_run:
+                    continue
+                ret_dict["db_info_list"].append({"db_id": row["db_id"], "host": row["host"], "version": row["version"]})
+            ret_dict["count"] = len(ret_dict["db_info_list"])
+    except Exception as e:
+        return 400, str(e)
+
+    return 200, json.dumps(ret_dict)
+
+
+def update_pg_settings(req):
+    """更新数据库默认参数
+    """
+    params = {
+        'db_id': csu_http.MANDATORY,
+        'pg_version': csu_http.MANDATORY | csu_http.INT
+    }
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    # check and get the db infor
+    sql = "SELECT host, pgdata, port, db_detail->>'version' as version FROM clup_db WHERE db_id = %s"
+    rows = dbapi.query(sql, (pdict['db_id'], ))
+    if not rows:
+        return 400, f"No records were found for this database(db_id={pdict['db_id']})."
+    db_dict = rows[0]
+
+    db_version = db_dict['version']
+    if int(float(db_version)) != int(pdict['pg_version']):
+        return 400, f"The database(db_id={pdict['db_id']}) version is {db_version},which is not allow to set for {pdict['pg_version']}."
+
+    # Delete the old settings
+    delete_sql = "DELETE FROM clup_pg_settings WHERE EXISTS (SELECT * FROM clup_settings WHERE pg_version=%s)"
+    dbapi.execute(delete_sql, (int(pdict['pg_version']), ))
+
+    # Insert new settings
+    code, result = get_all_settings(pdict['db_id'], {})
+    if code != 0:
+        return 400, f"Get the database(db_id={pdict['db_id']}) pg_settings failed, {result}."
+
+    try:
+        for setting_dict in result:
+            need_del_keys = ["setting_type", "conf_setting", "take_effect", "conf_unit"]
+            for key in need_del_keys:
+                if key in setting_dict:
+                    del setting_dict[key]
+            setting_dict["pg_version"] = pdict["pg_version"]
+            columns = ', '.join([key for key in setting_dict.keys()])
+            values = ', '.join(['%s'] * len(setting_dict.keys()))
+            inster_sql = f"INSERT INTO clup_pg_settings ({columns}) VALUES({values}) ON CONFLICT DO NOTHING"
+            dbapi.execute(inster_sql, tuple(setting_dict.values()))
+    except Exception as e:
+        return 400, f"Update pg_settings for pg_version({pdict['pg_version']}) with unexpected error, {str(e)}."
+    return 200, "Success"
 
 
 if __name__ == '__main__':
