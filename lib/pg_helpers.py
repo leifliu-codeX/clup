@@ -971,10 +971,10 @@ def get_pg_setting_item_val(item):
         return 3600 * 24 * 1000 * int(val)
 
 
-
-def get_all_settings(db_id, condition_dict):
+def get_all_settings(db_id, condition_dict=None, pg_version=None):
     """
     读取数据库所有的参数,优先级:postgresql.auto.conf > postgresql.conf > pg_settings
+    pg_version(int | None): 如果数据库处于停止状态，则查询clup_pg_settings表
     """
 
     sql = "SELECT host, pgdata FROM clup_db WHERE db_id = %s"
@@ -986,20 +986,39 @@ def get_all_settings(db_id, condition_dict):
         return -1, f'agent connection failure: {err_msg}'
     rpc = err_msg
     try:
+        # sql = "select category, name, setting, unit, vartype, context, enumvals, min_val, max_val, short_desc, extra_desc, pending_restart from pg_settings where true "
+
+        # if no show, filter settings which is not change
+        where_cond = " sourcefile is not null " if condition_dict.get("no_show", 0) else " true "
+        if "no_show" in condition_dict:
+            del condition_dict["no_show"]
+
+        args = list()
+        filter_cond = ""
+        if condition_dict:
+            for key, value in condition_dict.items():
+                if value:
+                    filter_cond += f" and {key} like %s"
+                    args.append(value)
+
+        # if db is not running, select from clup_pg_settings
+        if pg_version:
+            sql = "SELECT category, name, setting, unit, vartype, context, enumvals, min_val, " \
+                f"max_val, short_desc, extra_desc, pending_restart FROM clup_pg_settings WHERE pg_version = {pg_version} AND {where_cond}"
+            setting_rows = dbapi.query(f"{sql} {filter_cond}", tuple(args))
+            if not setting_rows:
+                return -1, f"No records were found from clup_pg_settings for pg_version={pg_version}, please update it before use."
+        else:
+            # if db is running, connect db and select from pg_settings
+            sql = f"SELECT * FROM pg_settings WHERE {where_cond} "
+            db_dict = dao.get_db_conn_info(db_id)
+            conn = dao.get_db_conn(db_dict)
+            setting_rows = dao.sql_query(conn, f"{sql} {filter_cond}", tuple(args))
+
         pgdata = rows[0]['pgdata']
         conf_file = pgdata + '/postgresql.conf'
         pg_auto_conf_file = pgdata + '/postgresql.auto.conf'
 
-        sql = "select category, name, setting, unit, vartype, context, enumvals, min_val, max_val, short_desc, extra_desc, pending_restart from pg_settings where true "
-        args = []
-        for key, value in condition_dict.items():
-            if value:
-                sql += f"and {key} like %s"
-                args.append(value)
-        # 连接目标库查询设置
-        db_dict = dao.get_db_conn_info(db_id)
-        conn = dao.get_db_conn(db_dict)
-        setting_rows = dao.sql_query(conn, sql, tuple(args))
         # 取出所有配置项,这里的配置值是默认值
         all_conf_list = [dict(row) for row in setting_rows]
         conf_list = [cnf['name'] for cnf in all_conf_list]
