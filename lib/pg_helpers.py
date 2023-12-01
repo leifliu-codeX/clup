@@ -812,15 +812,15 @@ def get_db_conn(db_id):
           "db_detail->'db_pass' as db_pass  FROM clup_db WHERE db_id=%s"
     rows = dbapi.query(sql, (db_id,))
     if len(rows) == 0:
-        return 400, 'The instance does not exist.'
+        return -1, f"The instance(db_id={db_id}) does not exist."
     db_dict = rows[0]
     db_dict['db_name'] = 'template1'
     try:
         conn = dao.get_db_conn(db_dict)
-        if not conn:
-            return 400, 'Failed to connect to the database!'
+        if not conn or isinstance(conn, str):
+            return -1, f"Failed to connect to the database(host={db_dict['host']}, port={db_dict['port']})!"
     except Exception as e:
-        return 400, f'Failed to connect to the database: {str(e)}'
+        return -1, f'Failed to connect to the database: {str(e)}.'
     return 0, conn
 
 
