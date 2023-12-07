@@ -380,14 +380,15 @@ def create_polardb_with_pfs(pdict):
     try:
         # db_detail cloumn data
         db_detail = {
+            "polar_hostid": 1,
+            'polar_type': 'master',
             'os_user': pdict['os_user'],
             'os_uid': pdict['os_uid'],
-            'pg_bin_path': pdict['pg_bin_path'],
             'db_user': pdict['db_user'],
             'db_pass': pdict['db_pass'],
             'version': pdict['version'],
-            'polar_type': 'master',
-            "polar_hostid": 1,
+            'pg_bin_path': pdict['pg_bin_path'],
+            'wal_segsize': pdict['wal_segsize'],
             'pfs_disk_name': pdict['pfs_disk_name'],
             'polar_datadir': pdict["polar_datadir"],
             'pfsdaemon_params': pdict['pfsdaemon_params']
@@ -436,6 +437,7 @@ def create_polardb_with_pfs(pdict):
         rpc_dict["db_user"] = pdict["db_user"]
         rpc_dict["version"] = pdict["version"]
         rpc_dict["pg_bin_path"] = pdict["pg_bin_path"]
+        rpc_dict["wal_segsize"] = pdict["wal_segsize"]
         rpc_dict['db_pass'] = db_encrypt.from_db_text(pdict['db_pass'])
 
         rpc_dict["polar_hostid"] = 1

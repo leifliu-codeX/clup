@@ -147,7 +147,15 @@ def create_pg_db(task_id, host, db_id, rpc_dict):
 
         step = 'Execute the initialization command(initdb)'
         general_task_mgr.log_info(task_id, f"{msg_prefix}: step start:  {step} ...")
-        cmd = f""" su - {os_user} -c '{pg_bin_path}/initdb  --auth-local=peer --auth-host=md5 --username="{db_user}" --pwfile=<(echo "{db_pass}") -D {pgdata} ' """
+        # 获得数据库的版本
+        str_pg_ver = rpc_dict['version']
+        cells = str_pg_ver.split('.')
+        pg_main_ver = int(cells[0])
+        # Add wal-segsize param
+        init_conf = ""
+        if pg_main_ver >= 11:
+            init_conf = f"--wal-segsize={rpc_dict['wal_segsize']}"
+        cmd = f""" su - {os_user} -c '{pg_bin_path}/initdb {init_conf} --auth-local=peer --auth-host=md5 --username="{db_user}" --pwfile=<(echo "{db_pass}") -D {pgdata} ' """
         err_code, err_msg, _out_msg = rpc.run_cmd_result(cmd)
         if err_code != 0:
             return err_code, err_msg
@@ -157,10 +165,6 @@ def create_pg_db(task_id, host, db_id, rpc_dict):
         general_task_mgr.log_info(task_id, f"{msg_prefix}: step start:  {step} ...")
 
         setting_dict = rpc_dict['setting_dict']
-        # 获得数据库的版本
-        str_pg_ver = rpc_dict['version']
-        cells = str_pg_ver.split('.')
-        pg_main_ver = int(cells[0])
         # 当打开归档后，wal_level不能是minimal
         if 'archive_mode' in setting_dict:
             if setting_dict.get('archive_mode') == 'on':
@@ -661,6 +665,7 @@ def create_sr_cluster(task_id, cluster_id, pdict):
         db_detail['os_user'] = pri_dict['os_user']
         db_detail['os_uid'] = pri_dict['os_uid']
         db_detail['pg_bin_path'] = pri_dict['pg_bin_path']
+        db_detail['wal_segsize'] = pdict["wal_segsize"]
 
         pri_dict['repl_app_name'] = pri_dict['repl_ip']
         pri_dict['cluster_id'] = cluster_id
@@ -694,6 +699,7 @@ def create_sr_cluster(task_id, cluster_id, pdict):
         rpc_dict['db_pass'] = db_encrypt.from_db_text(pdict['db_pass'])
         rpc_dict['repl_user'] = pdict['repl_user']
         rpc_dict['repl_pass'] = db_encrypt.from_db_text(pdict['repl_pass'])
+        rpc_dict['wal_segsize'] = pdict["wal_segsize"]
         rpc_dict['setting_dict'] = setting_dict
 
         unix_socket_directories = setting_dict.get('unix_socket_directories', '/tmp')
@@ -744,6 +750,7 @@ def create_sr_cluster(task_id, cluster_id, pdict):
                 'repl_user': pdict['repl_user'],
                 'repl_pass': pdict['repl_pass'],
                 'version': pri_dict['version'],
+                'wal_segsize': pdict["wal_segsize"],
                 'room_id': "0"
                 # 'reset_cmd': db['reset_cmd']
                 # 'mem_size': pri_dict['mem_size'],
@@ -912,7 +919,7 @@ def create_polardb(task_id, host, db_id, rpc_dict):
 
         step = 'Execute the initialization command(initdb)'
         general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
-        err_code, err_msg = polarCommon.init_db(db_pass)
+        err_code, err_msg = polarCommon.init_db(db_pass, rpc_dict["wal_segsize"])
         if err_code != 0:
             return -1, err_msg
         general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
@@ -1316,6 +1323,7 @@ def create_polar_sd_cluster(task_id, cluster_id, pdict):
             'version': pri_dict['version'],
             "polar_hostid": 1,
             'polar_type': 'master',
+            'wal_segsize': pdict['wal_segsize'],
             'pfs_disk_name': pdict['pfs_disk_name'],
             'polar_datadir': pdict["polar_datadir"],
             'pfsdaemon_params': pdict['pfsdaemon_params'],
@@ -1355,12 +1363,14 @@ def create_polar_sd_cluster(task_id, cluster_id, pdict):
         rpc_dict['db_pass'] = db_encrypt.from_db_text(pdict['db_pass'])
         rpc_dict['repl_pass'] = db_encrypt.from_db_text(pdict['repl_pass'])
 
+        rpc_dict['setting_dict'] = setting_dict
+        rpc_dict['wal_segsize'] = pdict['wal_segsize']
+
+        rpc_dict["polar_hostid"] = 1
+        rpc_dict["primary_slot_name"] = []
         rpc_dict['pfsdaemon_params'] = pdict['pfsdaemon_params']
         rpc_dict['pfs_disk_name'] = pdict['pfs_disk_name']
         rpc_dict['polar_datadir'] = pdict['polar_datadir']
-        rpc_dict['setting_dict'] = setting_dict
-        rpc_dict["polar_hostid"] = 1
-        rpc_dict["primary_slot_name"] = []
         for index in range(len(db_list) - 1):
             rpc_dict["primary_slot_name"].append(f"replica{index + 2}")
 

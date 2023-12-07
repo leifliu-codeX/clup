@@ -197,10 +197,9 @@ def create_db(req):
         'db_pass': csu_http.MANDATORY,  # 数据库密码
         'version': csu_http.MANDATORY,  # 数据库版本
         'db_type': csu_http.MANDATORY,  # 1代表postgresql,11为polardb
-        # 'conn_cnt': csu_http.MANDATORY,  # 连接数
         'instance_type': csu_http.MANDATORY,  # 数据库创建的类型
+        'wal_segsize': csu_http.INT,       # wal段文件大小，仅PG11及以上版本支持
         'setting_list': csu_http.MANDATORY
-        # [{'conf': ‘shared_buffer’, 'val': '128', 'unit': 'MB'}, {'conf': ‘max_connections', 'val': '128'}...]
     }
 
     err_code, pdict = csu_http.parse_parms(params, req)
@@ -258,6 +257,7 @@ def create_polardb(req):
         'db_type': csu_http.MANDATORY,      # 1代表postgresql,11为polardb
         'instance_type': csu_http.MANDATORY,  # 数据库创建的类型
         'setting_list': csu_http.MANDATORY,
+        'wal_segsize': csu_http.INT,           # wal段文件大小，仅PG11及以上版本支持
         'pfsdaemon_params': 0,              # pfs 参数
         'pfs_disk_name': 0,                 # pfs 磁盘名
         'polar_datadir': 0,                 # polardb 共享盘目录

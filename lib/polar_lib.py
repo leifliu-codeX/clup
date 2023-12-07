@@ -78,8 +78,8 @@ class PolarCommon:
         return err_code, err_msg
 
     # 初始化数据库
-    def init_db(self, db_pass):
-        param = f'{self.pg_bin_path}/initdb  --auth-local=peer --auth-host=md5 ' \
+    def init_db(self, db_pass, wal_segsize=16):
+        param = f'{self.pg_bin_path}/initdb --wal-segsize={wal_segsize} --auth-local=peer --auth-host=md5 ' \
             f'--username="{self.db_user}" --pwfile=<(echo "{db_pass}") -D {self.pgdata}'
         cmd_initdb = f""" su - {self.os_user} -c '{param}' """
         err_code, err_msg, _out_msg = self.rpc.run_cmd_result(cmd_initdb)

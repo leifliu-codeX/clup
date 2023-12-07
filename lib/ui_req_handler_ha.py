@@ -1127,6 +1127,7 @@ def create_sr_cluster(req):
         'probe_retry_interval': csu_http.MANDATORY | csu_http.INT,
         'probe_pri_sql': csu_http.MANDATORY,
         'probe_stb_sql': csu_http.MANDATORY,
+        'wal_segsize': csu_http.INT,           # wal段文件大小，仅PG11及以上版本支持
         'setting_list': csu_http.MANDATORY
     }
     err_code, pdict = csu_http.parse_parms(params, req)
@@ -1524,6 +1525,7 @@ def create_polar_sd_cluster(req):
         'probe_pri_sql': csu_http.MANDATORY,
         'probe_stb_sql': csu_http.MANDATORY,
         'setting_list': csu_http.MANDATORY,
+        'wal_segsize': csu_http.INT,           # wal段文件大小，仅PG11及以上版本支持
         'pfsdaemon_params': csu_http.MANDATORY,
         'pfs_disk_name': csu_http.MANDATORY,
         'polar_datadir': csu_http.MANDATORY,
