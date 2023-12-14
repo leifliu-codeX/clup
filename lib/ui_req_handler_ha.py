@@ -37,6 +37,7 @@ import dbapi
 import general_task_mgr
 import ha_mgr
 import helpers
+import ip_lib
 import long_term_task
 import node_state
 import pg_db_lib
@@ -44,6 +45,8 @@ import pg_helpers
 import polar_lib
 import rpc_utils
 import task_type_def
+
+from ipaddress import IPv4Network, IPv4Address
 
 
 def get_cluster_list(req):
@@ -1110,6 +1113,7 @@ def create_sr_cluster(req):
     """
     params = {
         'cluster_name': csu_http.MANDATORY,
+        'pool_id': csu_http.INT,
         'vip': csu_http.MANDATORY,
         'port': csu_http.MANDATORY,
         'db_user': csu_http.MANDATORY,
@@ -1506,6 +1510,7 @@ def check_ha(req):
 def create_polar_sd_cluster(req):
     params = {
         'cluster_name': csu_http.MANDATORY,
+        'pool_id': csu_http.INT,  # vip pool id
         'vip': csu_http.MANDATORY,
         'port': csu_http.MANDATORY,
         'db_user': csu_http.MANDATORY,
@@ -1942,3 +1947,280 @@ def batch_offline_cluster(req):
         return 400, f"There some cluster offline failed, {failed_cluster_list}."
     return 200, "Batch offline cluster success."
 
+
+def add_vip_pool(req):
+    """添加vip池
+    """
+    params = {
+        'start_ip': csu_http.MANDATORY,
+        'end_ip': csu_http.MANDATORY,
+        'mask_len': csu_http.INT
+    }
+
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    # check the start_ip and end_ip in the same network
+    start_ip_network = IPv4Network(f"{pdict['start_ip']}/{pdict['mask_len']}", strict=False)
+    end_ip_network = IPv4Network(pdict['end_ip'], strict=False)
+    if not end_ip_network.subnet_of(start_ip_network):
+        return 400, "The end ip and start ip is not in the same network."
+
+    # the end ip must more than the start ip
+    if int(IPv4Address(pdict['end_ip'])) < int(IPv4Address(pdict['start_ip'])):
+        return 400, "The end ip address cannot be smaller than the start ip address."
+
+    # check the vip pool is aready exists or not
+    sql = "SELECT * FROM clup_vip_pool"
+    rows = dbapi.query(sql)
+    for row in rows:
+        row_ip_network = IPv4Network(f"{row['start_ip']}/{row['mask_len']}", strict=False)
+        # check the start ip
+        if start_ip_network.subnet_of(row_ip_network):
+            return 400, f"The start ip is aready in the vip pool(pool_id={row['pool_id']}), please check."
+        # check the end ip
+        if end_ip_network.subnet_of(row_ip_network):
+            return 400, f"The end ip is aready in the vip pool(pool_id={row['pool_id']}), please check."
+
+    # add to clup_vip_pool
+    sql = "INSERT INTO clup_vip_pool(start_ip, end_ip, mask_len) VALUES(%(start_ip)s, %(end_ip)s, %(mask_len)s) RETURNING pool_id"
+    row = dbapi.query(sql, pdict)
+    if not row:
+        return 500, f"Excute sql({sql}) failed."
+
+    ret_data = {
+        "pool_id": row[0]["pool_id"]
+    }
+    return 200, json.dumps(ret_data)
+
+
+def get_vip_pool(req):
+    """查询vip池
+    """
+    params = {
+        'page_num': csu_http.MANDATORY | csu_http.INT,
+        'page_size': csu_http.MANDATORY | csu_http.INT,
+        'filter': 0
+    }
+
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    offset = (pdict['page_num'] - 1) * pdict['page_size']
+    sql = "SELECT * FROM clup_vip_pool LIMIT %s OFFSET %s"
+    rows = dbapi.query(sql, (pdict['page_size'], offset))
+
+    # get the vip pool total vip number and free vip number
+    for row in rows:
+        total_count = int(IPv4Address(row['end_ip'])) - int(IPv4Address(row['start_ip']))
+        row['total'] = total_count
+        # search vips
+        sql = "SELECT COUNT(*) FROM clup_used_vip WHERE pool_id = %s"
+        used_rows = dbapi.query(sql, (row['pool_id'], ))
+        row['free'] = total_count - used_rows[0]['count']
+
+    if not pdict.get('filter'):
+        ret_data = {"total": len(rows), "rows": list(rows)}
+        return 200, json.dumps(ret_data)
+
+    # if filter
+    ret_list = list()
+    for row in rows:
+        # check ip is in the network or not
+        ip_network = IPv4Network(pdict['filter'], strict=False)
+        row_ip_network = IPv4Network(f"{row['start_ip']}/{row['mask_len']}", strict=False)
+
+        if ip_network.subnet_of(row_ip_network):
+            ret_list.append(dict(row))
+            break
+
+    # not find any recard for filter ip
+    ret_data = {"total": len(ret_list), "rows": ret_list}
+    return 200, json.dumps(ret_data)
+
+
+def delete_vip_pool(req):
+    """删除vip池
+    """
+    params = {
+        'pool_id': csu_http.INT
+    }
+
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    # check this pool has vip is used or not
+    sql = "SELECT COUNT(*) FROM clup_used_vip WHERE pool_id = %s"
+    rows = dbapi.query(sql, (pdict['pool_id'], ))
+    if rows[0]["count"]:
+        return 400, "The vip pool is in used, please check the vip list."
+
+    sql = "DELETE FROM clup_vip_pool WHERE pool_id = %s"
+    dbapi.execute(sql, (pdict['pool_id'], ))
+
+    return 200, "Success"
+
+
+def update_vip_pool(req):
+    """更新vip池信息
+    """
+    params = {
+        'pool_id': csu_http.INT,
+        'start_ip': 0,
+        'end_ip': 0,
+        'mask_len': 0
+    }
+
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    # get the vip list
+    vip_sql = "SELECT vip FROM clup_used_vip WHERE pool_id = %s"
+    vip_rows = dbapi.query(vip_sql, (pdict['pool_id'], ))
+
+    # get the vip_pool infor
+    pool_sql = "SELECT * FROM clup_vip_pool WHERE pool_id = %s"
+    pool_rows = dbapi.query(pool_sql, (pdict['pool_id'], ))
+    if not pool_rows:
+        return 400, f"The vip pool(pool_id={pdict['pool_id']}) is not exists."
+
+    new_dict = pool_rows[0]
+    new_dict.update(pdict)
+    new_ip_network = IPv4Network(f"{new_dict['start_ip']}/{new_dict['mask_len']}", strict=False)
+
+    # check the end_ip is more than start_ip
+    if int(IPv4Address(new_dict['end_ip'])) < int(IPv4Address(new_dict['start_ip'])):
+        return 400, f"The end ip({new_dict['end_ip']}) cannot be smaller than the start ip({new_dict['start_ip']})."
+
+    # check start_ip is in the new network
+    if pdict.get("start_ip"):
+        start_ip_network = IPv4Network(pdict['start_ip'], strict=False)
+        if not start_ip_network.subnet_of(new_ip_network):
+            return 400, f"The start ip({pdict['start_ip']}) is not in the vip pool(pool_id={pdict['pool_id']})."
+
+    # check end_ip is in the new network
+    if pdict.get("end_ip"):
+        end_ip_network = IPv4Network(pdict['end_ip'], strict=False)
+        if not end_ip_network.subnet_of(new_ip_network):
+            return 400, f"The end ip({pdict['end_ip']}) is not in the vip pool(pool_id={pdict['pool_id']})."
+
+    # check others vip is in the new pool
+    for vip_row in vip_rows:
+        vip_network = IPv4Network(vip_row['vip'], strict=False)
+        if not vip_network.subnet_of(new_ip_network):
+            return 400, f"The vip({vip_row['vip']}) is not in this new network."
+
+    sql = "UPDATE clup_vip_pool SET start_ip = %(start_ip)s, end_ip = %(end_ip)s, mask_len = %(mask_len)s" \
+        " WHERE pool_id = %(pool_id)s RETURNING pool_id"
+    rows = dbapi.query(sql, new_dict)
+    if not rows:
+        return 400, f"Excute sql({sql}) failed."
+
+    return 200, "Update success."
+
+
+def get_vip_list(req):
+    params = {
+        'page_num': csu_http.MANDATORY | csu_http.INT,
+        'page_size': csu_http.MANDATORY | csu_http.INT,
+        'filter': 0
+    }
+
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    offset = (pdict['page_num'] - 1) * pdict['page_size']
+    sql = "SELECT * FROM clup_used_vip LIMIT %s OFFSET %s"
+    rows = dbapi.query(sql, (pdict['page_size'], offset))
+
+    ret_list = list()
+    db_id_list = [row["db_id"] for row in rows]
+    if db_id_list:
+        sql = "SELECT pool_id, vip, c.cluster_id, host, c.cluster_data->'clsuter_name' as cluster_name " \
+            " FROM clup_db db,clup_used_vip v,clup_cluster c WHERE db.db_id in %s " \
+            " AND v.db_id = db.db_id AND c.cluster_id = db.cluster_id ORDER BY pool_id"
+        used_info_rows = dbapi.query(sql, (tuple(db_id_list), ))
+        if used_info_rows:
+            ret_list = list(used_info_rows)
+
+    if not pdict.get('filter'):
+        ret_data = {"total": len(ret_list), "rows": ret_list}
+        return 200, json.dumps(ret_data)
+
+    # if filter
+    # ret_list = list()
+    # for row in rows:
+    #     # check ip is in the network or not
+    #     ip_network = IPv4Network(pdict['filter'], strict=False)
+    #     row_ip_network = IPv4Network(f"{row['start_ip']}/{row['mask_len']}", strict=False)
+
+    #     if ip_network.subnet_of(row_ip_network):
+    #         ret_list.append(dict(row))
+    #         break
+
+    # # not find any recard for filter ip
+    # ret_data = {"total": len(ret_list), "rows": ret_list}
+    # return 200, json.dumps(ret_data)
+
+
+def allot_one_vip(req):
+    params = {
+        'pool_id': csu_http.INT
+    }
+
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    # get the vip pool info
+    sql = "SELECT start_ip, end_ip, mask_len FROM clup_vip_pool WHERE pool_id = %s"
+    pool_rows = dbapi.query(sql, (pdict['pool_id'], ))
+    if not pool_rows:
+        return 400, f"Cant find any recard for vip pool(pool_id={pdict['pool_id']})."
+    start_ip_int = int(IPv4Address(pool_rows[0]['start_ip']))
+    end_ip_int = int(IPv4Address(pool_rows[0]['end_ip']))
+
+    sql = "SELECT vip FROM clup_used_vip WHERE pool_id = %s"
+    used_rows = dbapi.query(sql, (pdict['pool_id'], ))
+    if used_rows:
+        used_vip_list = [int(IPv4Address(row['vip'])) for row in used_rows]
+
+    # check used count
+    free_numbers = (end_ip_int - start_ip_int) - len(used_rows)
+    if not free_numbers:
+        return 400, "No vip can be allot from this vip pool."
+
+    ret_vip = None
+    for int_vip in range(start_ip_int, end_ip_int + 1):
+        if int_vip not in used_vip_list:
+            ret_vip = str(IPv4Address(int_vip))
+            break
+
+    if not ret_vip:
+        return 400, "Cant allot one vip from vip pool"
+
+    return 200, ret_vip
+
+
+def check_vip_in_pool(req):
+    """校验vip是否在vip池中
+    """
+    params = {
+        'pool_id': csu_http.INT,
+        'vip': csu_http.MANDATORY
+    }
+
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    code, result = ip_lib.check_vip_in_pool(pdict['pool_id'], pdict['vip'])
+    if code != 0:
+        return 400, result
+
+    return 200, result

@@ -24,9 +24,11 @@
 
 import os
 import re
+import dbapi
 
 import run_lib
 
+from ipaddress import IPv4Address
 
 def get_nic_ip_dict():
     """ 获得网上的各个ip地址的情况
@@ -210,3 +212,16 @@ def check_and_add_vip(vip):
     return 0
 
 
+def check_vip_in_pool(pool_id, vip):
+    # get the vip pool infor
+    sql = "SELECT start_ip, end_ip, mask_len FROM clup_vip_pool WHERE pool_id = %s"
+    rows = dbapi.query(sql, (pool_id, ))
+    if not rows:
+        return -1, f"Cant find any recard for vip pool(pool_id={pool_id})."
+    pool_info = rows[0]
+
+    vip_int = int(IPv4Address(vip))
+    if vip_int < int(IPv4Address(pool_info['start_ip'])) or vip_int > int(IPv4Address(pool_info['end_ip'])):
+        return -1, "This vip is not in the vip pool, please check."
+
+    return 0, "This vip is in the vip pool."
