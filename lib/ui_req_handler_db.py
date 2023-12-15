@@ -1275,15 +1275,14 @@ def build_standby(req):
         rows = dbapi.query(sql)
         if len(rows) == 0:
             return -1, f"The up database {pdict['up_db_id']} does not exist, please try again."
-        up_db_host = rows[0]['host']
         up_db_repl_ip = rows[0]['repl_ip']
         repl_user = pdict['repl_user']
         real_pass = db_encrypt.from_db_text(pdict['repl_pass'])
 
         rpc = None
-        err_code, err_msg = rpc_utils.get_rpc_connect(up_db_host)
+        err_code, err_msg = rpc_utils.get_rpc_connect(pdict["host"])
         if err_code != 0:
-            err_msg = f"Unable to connect to host: {up_db_host}"
+            err_msg = f"Unable to connect to host: {pdict['host']}"
             return 200, json.dumps({"err_code": -1, "err_msg": err_msg})
         rpc = err_msg
 
