@@ -429,6 +429,11 @@ def delete_cluster(req):
             if len(primary_host) > 0 and pdict.get('vip_delete_flag') == 1:
                 host = primary_host[0]['host']
                 rpc_utils.check_and_del_vip(host, vip)
+                # delete from clup_used_vip
+                dbp.execute("DELETE FROM clup_used_vip WHERE vip=%s", (vip, ))
+            else:
+                # update clup_used_vip
+                dbp.execute("UPDATE clup_used_vip SET used_reason=3,cluster_id=null WHERE vip=%s", (vip, ))
 
     except Exception as e:
         return 400, str(e)
@@ -539,6 +544,50 @@ def modify_sr_cluster_info(req):
     return 200, 'ok'
 
 
+def add_sr_cluster_room_info(req):
+    """添加流复制集群的机房信息
+    """
+    params = {
+        'cluster_id': csu_http.MANDATORY | csu_http.INT,
+        'pool_id': csu_http.INT,
+        'room_info': csu_http.MANDATORY
+    }
+
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    # check the vip is in the vip pool
+    pool_id = pdict['pool_id']
+    all_room_index = list(pdict["room_info"].keys())
+    vip = pdict['room_info'][all_room_index[-1]]['vip']
+
+    code, result = ip_lib.check_vip_in_pool(pool_id, vip, no_used_check=True)
+    if code != 0:
+        return 400, result
+
+    with dbapi.DBProcess() as dbp:
+        insert_sql = "INSERT INTO clup_used_vip(pool_id, vip, cluster_id, used_reason) VALUES(%s, %s, %s, 2) RETURNING vip"
+        insert_rows = dbp.query(insert_sql, (pool_id, vip, pdict['cluster_id']))
+        if not insert_rows:
+            return 400, f"Execute sql({insert_sql}) failed."
+
+        sql = "SELECT cluster_data FROM clup_cluster WHERE cluster_id=%s"
+        rows = dbp.query(sql, (pdict['cluster_id'], ))
+        if not rows:
+            return 400, f"Cluster (cluster_id={pdict['cluster_id']}) information not found"
+        cluster_data = rows[0]['cluster_data']
+        cluster_data['rooms'] = pdict['room_info']
+        try:
+            sql = "UPDATE clup_cluster SET cluster_data=%s WHERE cluster_id=%s"
+            dbp.execute(sql, (json.dumps(cluster_data), pdict['cluster_id']))
+        except Exception as e:
+            return 400, f'Failed to update database information: {repr(e)}'
+
+    pg_helpers.update_cluster_room_info(pdict['cluster_id'])
+    return 200, 'ok'
+
+
 def update_sr_cluster_room_info(req):
     """
     修改集群机房信息
@@ -547,6 +596,7 @@ def update_sr_cluster_room_info(req):
     """
     params = {
         'cluster_id': csu_http.MANDATORY | csu_http.INT,
+        'pool_id': csu_http.INT,
         'room_info': csu_http.MANDATORY
     }
     # 检查参数的合法性,如果成功,把参数放到一个字典中
@@ -554,14 +604,49 @@ def update_sr_cluster_room_info(req):
     if err_code != 0:
         return 400, pdict
 
+    # check the vip is in the vip pool
+    pool_id = pdict['pool_id']
+    all_room_index = list(pdict["room_info"].keys())
+    vip = pdict['room_info'][all_room_index[-1]]['vip']
+
+    code, result = ip_lib.check_vip_in_pool(pool_id, vip)
+    if code != 0:
+        return 400, result
+
     with dbapi.DBProcess() as dbp:
         sql = "SELECT cluster_data FROM clup_cluster WHERE cluster_id=%s"
         rows = dbp.query(sql, (pdict['cluster_id'], ))
         if not rows:
             return 400, f"Cluster (cluster_id={pdict['cluster_id']}) information not found"
         cluster_data = rows[0]['cluster_data']
-        cluster_data['rooms'] = pdict['room_info']
+
+        # check the old is used or not, if not used then delete
+        old_room_vip = cluster_data["rooms"][all_room_index[-1]]['vip']
+        if old_room_vip != vip:
+            check_sql = "SELECT db_id, used_reason FROM clup_used_vip WHERE vip = %s"
+            used_rows = dbp.query(check_sql, (vip, ))
+            if used_rows and used_rows[0]['used_reason'] == 1:
+                return 400, f"The vip {old_room_vip} is used by db(db_id={used_rows[0]['db_id']}),can not modify."
+            else:
+                # delete
+                delete_sql = "DELETE FROM clup_used_vip WHERE vip = %s"
+                dbp.execute(delete_sql, (old_room_vip, ))
+
+        # check the vip is exists or not
+        sql = "SELECT pool_id, cluster_id FROM clup_used_vip WHERE vip = %s"
+        rows = dbp.query(sql, (vip, ))
+        if rows:
+            # check the vip owner is this cluster
+            if rows[0]["cluster_id"] != pdict["cluster_id"]:
+                return 400, f"The vip is aready used by cluster(cluster_id={rows[0]['cluster_id']})."
+        else:
+            insert_sql = "INSERT INTO clup_used_vip(pool_id, vip, cluster_id, used_reason) VALUES(%s, %s, %s, 2) RETURNING vip"
+            insert_rows = dbp.query(insert_sql, (pool_id, vip, pdict["cluster_id"]))
+            if not insert_rows:
+                return 400, f"Execute sql({insert_sql}) failed."
+
         try:
+            cluster_data['rooms'] = pdict['room_info']
             sql = "UPDATE clup_cluster SET cluster_data=%s WHERE cluster_id=%s"
             dbp.execute(sql, (json.dumps(cluster_data), pdict['cluster_id']))
         except Exception as e:
@@ -599,16 +684,27 @@ def get_sr_cluster_room_info(req):
     room_info = {'0': default_room} if not room_info else room_info
     cluster_db_list = dao.get_cluster_db_list(cluster_id)
     room_info_list = []
-    for k, v in room_info.items():
-        if not v:
-            v.update(default_room)
-        v['room_id'] = k
-        v['room_use_state'] = 0
+    for room_id, room_info in room_info.items():
+        if not room_info:
+            room_info.update(default_room)
+        room_info['room_id'] = room_id
+        room_info['room_use_state'] = 0
         for item in cluster_db_list:
-            if item['room_id'] == v['room_id']:
-                v['room_use_state'] = 1
+            if item['room_id'] == room_info['room_id']:
+                room_info['room_use_state'] = 1
                 break
-        room_info_list.append(v)
+        # search vip pool info
+        sql = "SELECT p.pool_id, start_ip, end_ip FROM clup_vip_pool p,clup_used_vip v "\
+            " WHERE v.pool_id = p.pool_id AND v.vip = %s"
+        pool_rows = dbapi.query(sql, (room_info['vip'], ))
+        if not pool_rows:
+            return 400, f"No recard find the vip pool information for vip {room_info['vip']}."
+
+        room_info['pool_id'] = pool_rows[0]['pool_id']
+        room_info['start_ip'] = pool_rows[0]['start_ip']
+        room_info['end_ip'] = pool_rows[0]['end_ip']
+
+        room_info_list.append(room_info)
     for row in room_info_list:
         row['room'] = f"{row.get('room_name', '默认机房')}(id: {row.get('room_id', '默认机房')})"
     room_info_list = helpers.format_rows(room_info_list)
@@ -666,10 +762,17 @@ def delete_sr_cluster_room_info(req):
     try:
         cluster_data = rows[0]['cluster_data']
         room_info = cluster_data.get("rooms", {})
+        delete_vip = copy.copy(room_info[str(room_id)]['vip'])
+
         del room_info[str(room_id)]
         cluster_data['rooms'] = room_info
         sql = "UPDATE clup_cluster SET cluster_data = %s WHERE cluster_id = %s"
         dbapi.execute(sql, (json.dumps(cluster_data), cluster_id))
+
+        # delete clup_used_vip
+        delete_sql = "DELETE FROM clup_used_vip WHERE vip = %s"
+        dbapi.execute(delete_sql, (delete_vip, ))
+
     except Exception as e:
         return 400, f'delete failure: {repr(e)}'
     return 200, "OK"
@@ -2135,18 +2238,16 @@ def get_vip_list(req):
         return 400, pdict
 
     offset = (pdict['page_num'] - 1) * pdict['page_size']
-    sql = "SELECT * FROM clup_used_vip LIMIT %s OFFSET %s"
-    rows = dbapi.query(sql, (pdict['page_size'], offset))
-
     ret_list = list()
-    db_id_list = [row["db_id"] for row in rows]
-    if db_id_list:
-        sql = "SELECT pool_id, vip, c.cluster_id, host, c.cluster_data->'clsuter_name' as cluster_name " \
-            " FROM clup_db db,clup_used_vip v,clup_cluster c WHERE db.db_id in %s " \
-            " AND v.db_id = db.db_id AND c.cluster_id = db.cluster_id ORDER BY pool_id"
-        used_info_rows = dbapi.query(sql, (tuple(db_id_list), ))
-        if used_info_rows:
-            ret_list = list(used_info_rows)
+    sql = "SELECT pool_id, vip, used_reason, c.cluster_id, host, " \
+        " c.cluster_data->'clsuter_name' as cluster_name " \
+        " FROM clup_db db,clup_used_vip v,clup_cluster c" \
+        " WHERE v.vip = c.cluster_data->>'vip' AND db.cluster_id = c.cluster_id AND db.is_primary = 1" \
+        " ORDER BY cluster_id LIMIT %s OFFSET %s"
+
+    used_info_rows = dbapi.query(sql, (pdict['page_size'], offset))
+    if used_info_rows:
+        ret_list = list(used_info_rows)
 
     if not pdict.get('filter'):
         ret_data = {"total": len(ret_list), "rows": ret_list}
@@ -2185,6 +2286,7 @@ def allot_one_vip(req):
     start_ip_int = int(IPv4Address(pool_rows[0]['start_ip']))
     end_ip_int = int(IPv4Address(pool_rows[0]['end_ip']))
 
+    used_vip_list = list()
     sql = "SELECT vip FROM clup_used_vip WHERE pool_id = %s"
     used_rows = dbapi.query(sql, (pdict['pool_id'], ))
     if used_rows:

@@ -370,6 +370,9 @@ def delete_db(req):
             vip = vip_rows[0]['vip']
             rpc_utils.check_and_del_vip(host, vip)
 
+            # delete from clup_used_vip
+            dbapi.execute("DELETE FROM clup_used_vip WHERE vip=%s", (vip, ))
+
     sql = "DELETE FROM clup_db WHERE db_id=%(db_id)s"
     dbapi.execute(sql, pdict)
 

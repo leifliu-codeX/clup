@@ -30,6 +30,7 @@ import traceback
 
 import cluster_state
 import dao
+import dbapi
 import database_state
 import db_encrypt
 import general_task_mgr
@@ -280,6 +281,8 @@ def failover_primary_db(task_id, cluster_id, db_id):
             task_log_info(task_id, f"{pre_msg}: begin delete write vip({vip}) ...")
             try:
                 rpc_utils.check_and_del_vip(db_dict['host'], vip)
+                # update clup_used_vip
+                dbapi.execute("UPDATE clup_used_vip SET db_id=null,used_reason=2 WHERE vip=%s", (vip, ))
                 task_log_info(task_id, f"{pre_msg}: delete write vip({vip}) completed.")
             except OSError:
                 task_log_info(task_id, f"{pre_msg}: host({db_dict['host']}) maybe is down, can not delete write vip({vip})")
@@ -541,6 +544,8 @@ def failover_polar_primary_db(task_id, cluster_id, db_id):
             task_log_info(task_id, f"{pre_msg}: begin delete write vip({vip}) ...")
             try:
                 rpc_utils.check_and_del_vip(db_dict['host'], vip)
+                # update clup_uesd_vip
+                dbapi.execute("UPDATE clup_used_vip SET db_id=null,used_reason=2 WHERE vip=%s", (vip, ))
                 task_log_info(task_id, f"{pre_msg}: delete write vip({vip}) completed.")
             except OSError:
                 task_log_info(task_id, f"{pre_msg}: host({db_dict['host']}) maybe is down, can not delete write vip({vip})")

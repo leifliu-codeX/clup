@@ -34,6 +34,7 @@ import cluster_state
 import config
 import csuapp
 import dao
+import dbapi
 import database_state
 import db_encrypt
 import ha_logic
@@ -169,6 +170,8 @@ def sr_ha_check_vip(cluster_dict, clu_db_list):
                 if err_code < 0:
                     logging.error(f"Cluster({cluster_id}): Can not check and add vip({vip}) in host({host}): {err_msg}")
                     continue
+                # update clup_used_vip
+                dbapi.execute("UPDATE clup_used_vip SET db_id=%s,used_reason=1 WHERE vip = %s", (db_dict['db_id'], vip))
             finally:
                 rpc.close()
 

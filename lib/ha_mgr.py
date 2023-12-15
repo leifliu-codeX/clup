@@ -800,6 +800,8 @@ def sr_switch(task_id, cluster_id, db_id, primary_db, keep_cascaded=False):
             log_info(task_id, f"{pre_msg}: drop vip from current primary database({ old_pri_db['host']})")
             try:
                 rpc_utils.check_and_del_vip(old_pri_db['host'], vip)
+                # update clup_used_vip
+                dbapi.execute("UPDATE clup_used_vip SET db_id=null,used_reason=2 WHERE vip = %s", (vip, ))
             except Exception:
                 log_info(task_id, f"{pre_msg}: Unexpected error occurred during delete vip({vip}) from host({old_pri_db['host']}): {traceback.format_exc()}")
 
@@ -862,6 +864,8 @@ def sr_switch(task_id, cluster_id, db_id, primary_db, keep_cascaded=False):
             try:
                 log_info(task_id, f"{pre_msg}: add vip({vip}) to the original primary database({old_pri_db['host']})...")
                 rpc_utils.check_and_add_vip(old_pri_db['host'], vip)
+                # update clup_used_vip
+                dbapi.execute("UPDATE clup_used_vip SET db_id=%s,used_reason=1 WHERE vip = %s", (old_pri_db['db_id'], vip))
                 log_info(task_id, f"{pre_msg}: add vip({vip}) to the original primary database({old_pri_db['host']}) completed.")
             except Exception:
                 log_error(task_id,
@@ -939,6 +943,8 @@ def sr_switch(task_id, cluster_id, db_id, primary_db, keep_cascaded=False):
         log_info(task_id, f"{pre_msg}: add primary vip({vip}) to new primary({new_pri_db['host']}) ...")
         try:
             rpc_utils.check_and_add_vip(new_pri_db['host'], vip)
+            # update clup_used_vip
+            dbapi.execute("UPDATE clup_used_vip SET db_id=%s,used_reason=1 WHERE vip=%s", (new_pri_db['db_id'], vip))
             log_info(task_id, f"{pre_msg}: add primary vip({vip}) to new primary({new_pri_db['host']}) completed.")
         except Exception:
             log_error(task_id, f"{pre_msg} : unexpected error occurred during add vip ({vip}) "
@@ -1158,6 +1164,8 @@ def polar_switch(task_id, cluster_id, new_pri_db_id, old_pri_db_id):
             log_info(task_id, f"{pre_msg}: drop vip from current primary database({ old_pri_db_dict['host']})")
             try:
                 rpc_utils.check_and_del_vip(old_pri_db_dict['host'], vip)
+                # update clup_used_vip
+                dbapi.execute("UPDATE clup_used_vip SET db_id=null,used_reason=2 WHERE vip=%s", (vip, ))
             except Exception:
                 log_info(task_id, f"{pre_msg}: delete vip({vip}) from host({old_pri_db_dict['host']}) with unexpected error,{traceback.format_exc()}.")
 
@@ -1167,6 +1175,8 @@ def polar_switch(task_id, cluster_id, new_pri_db_id, old_pri_db_id):
         log_info(task_id, f"{pre_msg}: add primary vip({vip}) to new primary({new_pri_db_dict['host']}) ...")
         try:
             rpc_utils.check_and_add_vip(new_pri_db_dict['host'], vip)
+            # update clup_used_vip
+            dbapi.execute("UPDATE clup_used_vip SET db_id=%s,used_reason=1 WHERE vip = %s", (new_pri_db_id['db_id'], vip))
             log_info(task_id, f"{pre_msg}: add primary vip({vip}) to new primary({new_pri_db_dict['host']}) completed.")
         except Exception:
             log_error(task_id, f"{pre_msg}: add vip ({vip}) with unexpected error "

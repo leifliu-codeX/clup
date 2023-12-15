@@ -27,6 +27,9 @@ import os
 import config
 import dbapi
 import run_lib
+import ip_lib
+
+from ipaddress import IPv4Address, IPv4Network
 
 
 def get_dbapi_obj():
@@ -66,12 +69,78 @@ def upgrade_common(v1, v2):
     return 0, ''
 
 
+def create_default_vip_pool():
+    """建立默认的vip池
+    """
+    # 获取所有已配置的vip
+    sql = "SELECT c.cluster_id, c.cluster_data->>'vip' as vip, db_id, host " \
+        " FROM clup_cluster c,clup_db d " \
+        " WHERE c.cluster_id = d.cluster_id AND d.is_primary = 1"
+    rows = dbapi.query(sql)
+
+    vip_pool_info = dict()
+    # 默认的vip池的掩码位数都是24
+    for row in rows:
+        vip = row["vip"]
+        # 获取vip所在的网络
+        vip_network = IPv4Network(f'{vip}/24', strict=False)
+        if vip_network not in vip_pool_info:
+            vip_pool_info[vip_network] = {
+                "vip_list": list(),
+                "db_id": row["db_id"],
+                "cluster_id": row["cluster_id"]
+            }
+
+        vip_pool_info[vip_network]["vip_list"].append(int(IPv4Address(vip)))
+
+
+    # create vip pool
+    for vip_network, vip_info in vip_pool_info.items():
+        vip_list = vip_info["vip_list"]
+        start_vip = min(vip_list)
+        end_vip = max(vip_list)
+        try:
+            with dbapi.DBProcess() as dbp:
+                # insert into clup_vip_pool
+                sql = "INSERT INTO clup_vip_pool(start_ip, end_ip, mask_len) VALUES(%s, %s, 24) RETURNING pool_id"
+                ret_row = dbp.query(sql, (str(IPv4Address(start_vip)), str(IPv4Address(end_vip))))
+                if not ret_row:
+                    return -1, f"Excute sql({sql}) failed, can not insert data to clup_vip_pool."
+                pool_id = ret_row[0]['pool_id']
+
+                # insert into clup_used_vip
+                for vip in vip_list:
+                    sql = "INSERT INTO clup_used_vip(pool_id, vip, db_id, cluster_id, used_reason)" \
+                        " VALUES(%s, %s, %s, %s, 1) RETURNING vip"
+                    row = dbp.query(sql, (pool_id, str(IPv4Address(vip)), vip_info["db_id"], vip_info["cluster_id"]))
+                    if not row:
+                        return -1, f"Excute sql({sql}) failed, can not insert data to clup_used_vip."
+        except Exception as e:
+            return -1, f"Create vip pool with unexpected error, {str(e)}."
+    return 0, "All clsuter vip create vip pool."
+
+
+def upgrade_with_vip_pool(v1, v2):
+    sql_path = config.get_sql_path()
+    sql_scripts = os.path.join(sql_path, f'v{v1}_v{v2}.sql')
+    try:
+        err_code, err_msg, _out_msg = psql_run(sql_scripts)
+        if err_code != 0:
+            return err_code, err_msg
+        code, result = create_default_vip_pool()
+        if code != 0:
+            return -1, result
+    except Exception as e:
+        return -1, f"run sql file error: \n{sql_scripts}\n{str(e)}\n"
+    return 0, ''
+
+
 upgrade_func_list = [
     ["5.0.0", upgrade_common],
     ['5.0.1', upgrade_common],
     ['5.0.2', upgrade_common],
     ['5.0.4', upgrade_common],
-    ['5.0.5', upgrade_common],
+    ['5.0.5', upgrade_with_vip_pool],
 ]
 
 

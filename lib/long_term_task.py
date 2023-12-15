@@ -684,6 +684,12 @@ def create_sr_cluster(task_id, cluster_id, pdict):
             return -1, err_msg
         primary_db_id = rows[0]['db_id']
 
+        # insert vip infor
+        insert_vip_sql = "INSERT INTO clup_used_vip(pool_id, vip, db_id, cluster_id, used_reason) values(%s, %s, %s, %s, 1) RETURNING vip"
+        insert_vip_row = dbapi.query(insert_vip_sql, (pdict['pool_id'], pdict['vip'], primary_db_id, cluster_id))
+        if not insert_vip_row:
+            return -1, f"Execute sql({insert_vip_sql}) failed."
+
         # 开始创建主库
         general_task_mgr.log_info(task_id, f'{pre_msg}: create primary db (db_id: {primary_db_id})')
 
