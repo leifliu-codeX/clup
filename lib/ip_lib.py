@@ -31,7 +31,7 @@ import run_lib
 from ipaddress import IPv4Address
 
 def get_nic_ip_dict():
-    """ 获得网上的各个ip地址的情况
+    """ 获得网卡上的各个ip地址的情况
     :return: dict
     返回一个字典，格式如下:
     {
@@ -212,7 +212,7 @@ def check_and_add_vip(vip):
     return 0
 
 
-def check_vip_in_pool(pool_id, vip):
+def check_vip_in_pool(pool_id, vip, no_used_check=False):
     # get the vip pool infor
     sql = "SELECT start_ip, end_ip, mask_len FROM clup_vip_pool WHERE pool_id = %s"
     rows = dbapi.query(sql, (pool_id, ))
@@ -223,5 +223,11 @@ def check_vip_in_pool(pool_id, vip):
     vip_int = int(IPv4Address(vip))
     if vip_int < int(IPv4Address(pool_info['start_ip'])) or vip_int > int(IPv4Address(pool_info['end_ip'])):
         return -1, "This vip is not in the vip pool, please check."
+
+    if no_used_check:
+        sql = "SELECT pool_id, db_id, used_reason FROM clup_used_vip WHERE vip = %s"
+        rows = dbapi.query(sql, (vip, ))
+        if rows:
+            return -1, f"This vip is aready used for (db_id={rows[0]['db_id']})."
 
     return 0, "This vip is in the vip pool."

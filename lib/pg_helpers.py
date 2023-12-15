@@ -1451,7 +1451,7 @@ def update_cluster_room_info(cluster_id, db_id=None):
 
     cluster_type = rows[0]['cluster_type']
     if cluster_type == 2:  # 跳过共享存储的集群对机房信息的更新
-        return
+        return 0, ""
 
     cluster_data = rows[0]['cluster_data']
     room_info = cluster_data.get('rooms', {})
