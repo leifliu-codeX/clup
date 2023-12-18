@@ -73,50 +73,71 @@ def create_default_vip_pool():
     """建立默认的vip池
     """
     # 获取所有已配置的vip
-    sql = "SELECT c.cluster_id, c.cluster_data->>'vip' as vip, db_id, host " \
-        " FROM clup_cluster c,clup_db d " \
-        " WHERE c.cluster_id = d.cluster_id AND d.is_primary = 1"
+    sql = "SELECT c.cluster_id,c.cluster_data->'rooms' as rooms,c.cluster_data->>'vip' as vip, " \
+        " db_id FROM clup_cluster c,clup_db db WHERE c.cluster_id=db.cluster_id AND db.is_primary=1"
     rows = dbapi.query(sql)
 
-    vip_pool_info = dict()
+    cluster_info_list = list()
     # 默认的vip池的掩码位数都是24
-    for row in rows:
-        vip = row["vip"]
-        # 获取vip所在的网络
-        vip_network = IPv4Network(f'{vip}/24', strict=False)
-        if vip_network not in vip_pool_info:
-            vip_pool_info[vip_network] = {
-                "vip_list": list(),
-                "db_id": row["db_id"],
-                "cluster_id": row["cluster_id"]
-            }
+    for cluster_info in rows:
+        cluster_info_list.append({
+            "vip": cluster_info["vip"],
+            "primary_db_id": cluster_info["db_id"],
+            "cluster_id": cluster_info["cluster_id"],
+            "vip_list": [room_info["vip"] for room_info in cluster_info["rooms"].values()]
+        })
 
-        vip_pool_info[vip_network]["vip_list"].append(int(IPv4Address(vip)))
+    vip_info = dict()
+    # get all vip network and vip list
+    for cluster_info in cluster_info_list:
+        for vip in cluster_info["vip_list"]:
+            vip_network = str(IPv4Network(f'{vip}/24', strict=False))
+            if vip_network not in vip_info:
+                vip_info[vip_network] = list()
 
+            vip_info[vip_network].append(int(IPv4Address(vip)))
 
-    # create vip pool
-    for vip_network, vip_info in vip_pool_info.items():
-        vip_list = vip_info["vip_list"]
-        start_vip = min(vip_list)
-        end_vip = max(vip_list)
-        try:
-            with dbapi.DBProcess() as dbp:
+    try:
+        with dbapi.DBProcess() as dbp:
+            # create vip pool
+            vip_pool_info = dict()
+            for vip_network, vip_list in vip_info.items():
+                start_ip = min(vip_list)
+                end_ip = max(vip_list)
+
                 # insert into clup_vip_pool
                 sql = "INSERT INTO clup_vip_pool(start_ip, end_ip, mask_len) VALUES(%s, %s, 24) RETURNING pool_id"
-                ret_row = dbp.query(sql, (str(IPv4Address(start_vip)), str(IPv4Address(end_vip))))
-                if not ret_row:
-                    return -1, f"Excute sql({sql}) failed, can not insert data to clup_vip_pool."
-                pool_id = ret_row[0]['pool_id']
+                pool_rows = dbp.query(sql, (str(IPv4Address(start_ip)), str(IPv4Address(end_ip))))
+                if not pool_rows:
+                    return -1, f"Excute sql({sql}) failed."
 
-                # insert into clup_used_vip
-                for vip in vip_list:
-                    sql = "INSERT INTO clup_used_vip(pool_id, vip, db_id, cluster_id, used_reason)" \
-                        " VALUES(%s, %s, %s, %s, 1) RETURNING vip"
-                    row = dbp.query(sql, (pool_id, str(IPv4Address(vip)), vip_info["db_id"], vip_info["cluster_id"]))
-                    if not row:
-                        return -1, f"Excute sql({sql}) failed, can not insert data to clup_used_vip."
-        except Exception as e:
-            return -1, f"Create vip pool with unexpected error, {str(e)}."
+                if vip_network not in vip_pool_info:
+                    vip_pool_info[vip_network] = {
+                        "pool_id": pool_rows[0]["pool_id"],
+                        "start_ip": start_ip,
+                        "end_vip": end_ip
+                    }
+
+            # add used vip
+            for cluster_info in cluster_info_list:
+                cluster_id = cluster_info["cluster_id"]
+                for vip in cluster_info["vip_list"]:
+                    vip_network = str(IPv4Network(f"{vip}/24", strict=False))
+                    pool_info = vip_pool_info[vip_network]
+                    if vip == cluster_info["vip"]:
+                        # insert into clup_used_vip which used_reason = 1
+                        sql = "INSERT INTO clup_used_vip(pool_id, vip, db_id, cluster_id, used_reason) VALUES(%s, %s, %s, %s, 1) RETURNING vip"
+                        vip_rows = dbp.query(sql, (pool_info["pool_id"], vip, cluster_info["primary_db_id"], cluster_id))
+                    else:
+                        # insert into clup_used_vip which used_reason = 2
+                        sql = "INSERT INTO clup_used_vip(pool_id, vip, cluster_id, used_reason) VALUES(%s, %s, %s, 2) RETURNING vip"
+                        vip_rows = dbp.query(sql, (pool_info["pool_id"], vip, cluster_id))
+                    if not vip_rows:
+                        return -1, f"Excute sql({sql}) failed."
+
+    except Exception as e:
+        return -1, f"Create vip pool with unexpected error, {str(e)}."
+
     return 0, "All clsuter vip create vip pool."
 
 

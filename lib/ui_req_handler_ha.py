@@ -698,7 +698,7 @@ def get_sr_cluster_room_info(req):
             " WHERE v.pool_id = p.pool_id AND v.vip = %s"
         pool_rows = dbapi.query(sql, (room_info['vip'], ))
         if not pool_rows:
-            return 400, f"No recard find the vip pool information for vip {room_info['vip']}."
+            return 400, f"No recard find the vip information for vip {room_info['vip']}."
 
         room_info['pool_id'] = pool_rows[0]['pool_id']
         room_info['start_ip'] = pool_rows[0]['start_ip']
@@ -2117,7 +2117,7 @@ def get_vip_pool(req):
 
     # get the vip pool total vip number and free vip number
     for row in rows:
-        total_count = int(IPv4Address(row['end_ip'])) - int(IPv4Address(row['start_ip']))
+        total_count = int(IPv4Address(row['end_ip'])) - int(IPv4Address(row['start_ip'])) + 1
         row['total'] = total_count
         # search vips
         sql = "SELECT COUNT(*) FROM clup_used_vip WHERE pool_id = %s"
@@ -2239,34 +2239,53 @@ def get_vip_list(req):
 
     offset = (pdict['page_num'] - 1) * pdict['page_size']
     ret_list = list()
-    sql = "SELECT pool_id, vip, used_reason, c.cluster_id, host, " \
-        " c.cluster_data->'clsuter_name' as cluster_name " \
-        " FROM clup_db db,clup_used_vip v,clup_cluster c" \
-        " WHERE v.vip = c.cluster_data->>'vip' AND db.cluster_id = c.cluster_id AND db.is_primary = 1" \
-        " ORDER BY cluster_id LIMIT %s OFFSET %s"
+    sql = "SELECT p.pool_id, p.start_ip, p.mask_len, vip, db_id, cluster_id, used_reason" \
+        " FROM clup_used_vip u,clup_vip_pool p" \
+        " WHERE u.pool_id=p.pool_id ORDER BY pool_id LIMIT %s OFFSET %s"
 
     used_info_rows = dbapi.query(sql, (pdict['page_size'], offset))
-    if used_info_rows:
-        ret_list = list(used_info_rows)
+    if not used_info_rows:
+        ret_data = {"total": len(ret_list), "rows": ret_list}
+        return 200, json.dumps(ret_data)
+
+    with dbapi.DBProcess() as dbp:
+        for row in used_info_rows:
+            row["host"] = ""
+            row["cluster_name"] = ""
+
+            if row.get("cluster_id"):
+                sql = "SELECT cluster_data->'cluster_name' as cluster_name from clup_cluster WHERE cluster_id = %s"
+                cluster_rows = dbp.query(sql, (row["cluster_id"], ))
+                if cluster_rows:
+                    row["cluster_name"] = cluster_rows[0]["cluster_name"]
+            if row.get("db_id"):
+                sql = "SELECT host FROM clup_db WHERE db_id=%s"
+                db_rows = dbp.query(sql, (row["db_id"], ))
+                if db_rows:
+                    row["host"] = db_rows[0]["host"]
+            ret_list.append(dict(row))
 
     if not pdict.get('filter'):
         ret_data = {"total": len(ret_list), "rows": ret_list}
         return 200, json.dumps(ret_data)
 
     # if filter
-    # ret_list = list()
-    # for row in rows:
-    #     # check ip is in the network or not
-    #     ip_network = IPv4Network(pdict['filter'], strict=False)
-    #     row_ip_network = IPv4Network(f"{row['start_ip']}/{row['mask_len']}", strict=False)
+    filter_ret_list = list()
+    for row in ret_list:
+        if row["host"] == pdict["filter"]:
+            filter_ret_list.append(row)
+        elif row["vip"] == pdict["filter"]:
+            filter_ret_list.append(row)
+        # else:
+        #     # check ip is in the network or not
+        #     ip_network = IPv4Network(pdict['filter'], strict=False)
+        #     row_ip_network = IPv4Network(f"{row['start_ip']}/{row['mask_len']}", strict=False)
 
-    #     if ip_network.subnet_of(row_ip_network):
-    #         ret_list.append(dict(row))
-    #         break
+        #     if ip_network.subnet_of(row_ip_network):
+        #         filter_ret_list.append(row)
 
-    # # not find any recard for filter ip
-    # ret_data = {"total": len(ret_list), "rows": ret_list}
-    # return 200, json.dumps(ret_data)
+    ret_data = {"total": len(filter_ret_list), "rows": filter_ret_list}
+    return 200, json.dumps(ret_data)
 
 
 def allot_one_vip(req):
