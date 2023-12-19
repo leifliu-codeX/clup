@@ -1,0 +1,1 @@
+import{g as o}from"./vendor.194c4086.js";const n=(n,i=window.vm.$t("dynamicTools.ti-shi"),t="warning",s="el-icon-warning",c=window.vm.$t("dbList.shi"),e=window.vm.$t("dbList.fou"),a=!1)=>o.exports.MessageBox.confirm(n,i,{confirmButtonText:c,cancelButtonText:e,type:t,iconClass:s,closeOnClickModal:a});export{n as m};
