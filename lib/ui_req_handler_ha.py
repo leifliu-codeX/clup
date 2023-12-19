@@ -2277,17 +2277,39 @@ def get_vip_list(req):
         for row in used_info_rows:
             row["host"] = ""
             row["cluster_name"] = ""
-
+            # get cluster_name
             if row.get("cluster_id"):
                 sql = "SELECT cluster_data->'cluster_name' as cluster_name from clup_cluster WHERE cluster_id = %s"
                 cluster_rows = dbp.query(sql, (row["cluster_id"], ))
                 if cluster_rows:
                     row["cluster_name"] = cluster_rows[0]["cluster_name"]
+            # get host
             if row.get("db_id"):
                 sql = "SELECT host FROM clup_db WHERE db_id=%s"
                 db_rows = dbp.query(sql, (row["db_id"], ))
                 if db_rows:
                     row["host"] = db_rows[0]["host"]
+
+            # if used_reason is 1 check vip_exists on host
+            if row["used_reason"] == 1 and row["host"] != "":
+                try:
+                    rpc = None
+                    code, result = rpc_utils.get_rpc_connect(row["host"])
+                    if code != 0:
+                        row["used_reason"] = -1
+                    else:
+                        rpc = result
+                        code, result = rpc.vip_exists(row["vip"])
+                        if result == "":
+                            row["used_reason"] = 2
+                            # update clup_used_vip
+                            dbp.execute("UPDATE clup_used_vip SET used_reason=2 WHERE vip=%s", (row["vip"], ))
+                except Exception as e:
+                    logging.error(f"Check vip exists in host {row['host']} with unexpected error, {str(e)}.")
+                finally:
+                    if rpc:
+                        rpc.close()
+
             ret_list.append(dict(row))
 
     if not pdict.get('filter'):

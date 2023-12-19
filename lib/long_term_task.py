@@ -685,7 +685,7 @@ def create_sr_cluster(task_id, cluster_id, pdict):
         primary_db_id = rows[0]['db_id']
 
         # update clup_used_vip
-        update_vip_sql = "UPDATE clup_used_vip SET db_id=%s,used_reason=1 WHERE vip=%s RETURNING vip"
+        update_vip_sql = "UPDATE clup_used_vip SET db_id=%s,used_reason=2 WHERE vip=%s RETURNING vip"
         update_vip_row = dbapi.query(update_vip_sql, (primary_db_id, pdict['vip']))
         if not update_vip_row:
             return -1, f"Execute sql({update_vip_sql}) failed."
@@ -1356,7 +1356,7 @@ def create_polar_sd_cluster(task_id, cluster_id, pdict):
         primary_db_id = rows[0]['db_id']
 
         # update clup_used_vip
-        update_vip_sql = "UPDATE clup_used_vip SET db_id=%s,used_reason=1 WHERE vip=%s RETURNING vip"
+        update_vip_sql = "UPDATE clup_used_vip SET db_id=%s,used_reason=2 WHERE vip=%s RETURNING vip"
         update_vip_row = dbapi.query(update_vip_sql, (primary_db_id, pdict['vip']))
         if not update_vip_row:
             return -1, f"Execute sql({update_vip_sql}) failed."

@@ -1145,11 +1145,14 @@ def modify_db_info(req):
         err_msg = f"Modify the database(db_id={db_id}) information in clup_db with unexpected error, {str(e)}."
         return 400, err_msg
 
+    if not pdict.get("port"):
+        return 200, "Success"
+
     # 修改配置文件中的端口
     rpc = None
     try:
         # get the host
-        sql = f"SELECT host in clup_db WHERE db_id = {db_id}"
+        sql = f"SELECT host from clup_db WHERE db_id = {db_id}"
         rows = dbapi.query(sql)
         if not rows:
             return 400, f"Cant find the information from clup_db,which db_id is {db_id}."
@@ -1173,7 +1176,7 @@ def modify_db_info(req):
         if rpc:
             rpc.close()
 
-    return 200, 'OK'
+    return 200, 'Success'
 
 
 def get_primary_db_info(req):
@@ -1987,5 +1990,55 @@ def pfs_growfs(req):
     code, result = polar_lib.pfs_growfs(db_info, pdict['pfs_disk_name'], pdict['current_chunks'], pdict['target_chunks'])
     if code != 0:
         return 400, f"Growfs the pfs disk failed, {result}."
+
+    return 200, "Success"
+
+
+def modify_vip_on_host(req):
+    """更改vip在主机上的绑定
+    """
+    params = {
+        "host": csu_http.MANDATORY,
+        "vip": csu_http.MANDATORY,
+        "option": csu_http.INT
+    }
+    # check request params
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    vip = pdict["vip"]
+    host = pdict["host"]
+
+    # bond vip on host
+    if pdict["option"] == 1:
+        code, result = rpc_utils.check_and_add_vip(host, vip)
+        if code != 0:
+            return 400, result
+        # update clup_used_vip
+        sql = "UPDATE clup_used_vip SET used_reason=1 WHERE vip=%s RETURNING vip"
+        rows = dbapi.query(sql, (vip, ))
+        if not rows:
+            return 400, f"Excute sql({sql}) failed."
+
+    # remove vip from host
+    else:
+        # check the cluster state
+        sql = "SELECT c.cluster_id, state, cluster_data->>'cluster_name' as cluster_name " \
+            " FROM clup_used_vip v,clup_cluster c WHERE vip=%s AND c.cluster_id=v.cluster_id"
+        rows = dbapi.query(sql, (vip, ))
+        if rows and rows[0]['state'] not in [cluster_state.FAILED, cluster_state.OFFLINE]:
+            cluster_id = rows[0]["cluster_id"]
+            cluster_name = rows[0]["cluster_name"]
+            return 400, f"The cluster({cluster_id}:{cluster_name}) state is not OFFLINE or FAILED,cant remove vip from host."
+        code, result = rpc_utils.check_and_del_vip(host, vip)
+        if code != 0:
+            return 400, result
+
+        # update clup_used_vip
+        sql = "UPDATE clup_used_vip SET used_reason=2 WHERE vip=%s RETURNING vip"
+        rows = dbapi.query(sql, (vip, ))
+        if not rows:
+            return 400, f"Excute sql({sql}) failed."
 
     return 200, "Success"
