@@ -429,11 +429,13 @@ def delete_cluster(req):
             if len(primary_host) > 0 and pdict.get('vip_delete_flag') == 1:
                 host = primary_host[0]['host']
                 rpc_utils.check_and_del_vip(host, vip)
-                # delete from clup_used_vip
-                dbp.execute("DELETE FROM clup_used_vip WHERE vip=%s", (vip, ))
+
+            # delete or update clup_used_vip
+            if pdict.get("vip_delete_flag"):
+                dbp.execute("DELETE FROM clup_used_vip WHERE cluster_id=%s", (cluster_id, ))
             else:
                 # update clup_used_vip
-                dbp.execute("UPDATE clup_used_vip SET used_reason=3,cluster_id=null WHERE vip=%s", (vip, ))
+                dbp.execute("UPDATE clup_used_vip SET used_reason=3,cluster_id=null WHERE cluster_id=%s", (cluster_id, ))
 
     except Exception as e:
         return 400, str(e)
@@ -1241,6 +1243,12 @@ def create_sr_cluster(req):
     if err_code != 0:
         return 400, pdict
 
+    # check vip is used or not
+    check_sql = "SELECT * FROM clup_used_vip WHERE vip=%s"
+    check_rows = dbapi.query(check_sql, (pdict["vip"], ))
+    if check_rows:
+        return 400, f"The vip({pdict['vip']}) is aready used by(db_id={check_rows[0]['db_id']},cluster_id={check_rows[0]['cluster_id']}), please check."
+
     # 检查rpc连接以及数据库插件
     try:
         rpc = None
@@ -1309,11 +1317,16 @@ def create_sr_cluster(req):
     rows = dbapi.query(sql, (1, json.dumps(cluster_data_in_db), 0, 0))
     if len(rows) == 0:
         return 400, 'Failed to insert the cluster into the database'
-
-    # 开启线程后台创建
     cluster_id = rows[0]['cluster_id']
     pdict['cluster_id'] = cluster_id
 
+    # insert into clup_used_vip
+    insert_sql = "INSERT INTO clup_used_vip(pool_id, vip, cluster_id, used_reason) VALUES(%s, %s, %s, 2) RETURNING vip"
+    insert_rows = dbapi.query(insert_sql, (pdict["pool_id"], pdict["vip"], cluster_id))
+    if not insert_rows:
+        return 400, f"Excute sql({insert_sql}) failed."
+
+    # 开启线程后台创建
     task_name = f"create_sr_cluster(cluster_id={pdict['cluster_id']})"
     task_id = general_task_mgr.create_task(task_type_def.CREATE_SR_CLUSTER, task_name, {'cluster_id': pdict['cluster_id']})
     general_task_mgr.run_task(task_id, long_term_task.task_create_sr_cluster, (cluster_id, pdict))
@@ -1643,6 +1656,12 @@ def create_polar_sd_cluster(req):
     if err_code != 0:
         return 400, pdict
 
+    # check vip is exists or not
+    check_sql = "SELECT * FROM clup_used_vip WHERE vip=%s"
+    check_rows = dbapi.query(check_sql, (pdict["vip"], ))
+    if check_rows:
+        return 400, f"The vip({pdict['vip']}) is aready used by(db_id={check_rows[0]['db_id']},cluster_id={check_rows[0]['cluster_id']}), please check."
+
     # 检查rpc是否能够连接上
     err_host_list = []
     for db in pdict['db_list']:
@@ -1673,10 +1692,16 @@ def create_polar_sd_cluster(req):
     rows = dbapi.query(sql, (11, json.dumps(cluster_data), 0, 0))
     if len(rows) == 0:
         return 400, 'Failed to add the database to the cluster.'
-
-    # 开启线程后台创建数据库
     cluster_id = rows[0]['cluster_id']
     pdict['cluster_id'] = cluster_id
+
+    # insert into clup_used_vip
+    insert_sql = "INSERT INTO clup_used_vip(pool_id, vip, cluster_id, used_reason) VALUES(%s, %s, %s, 2) RETURNING vip"
+    insert_rows = dbapi.query(insert_sql, (pdict["pool_id"], pdict["vip"], cluster_id))
+    if not insert_rows:
+        return 400, f"Excute sql({insert_sql}) failed."
+
+    # 开启线程后台创建数据库
     task_name = f"create_sr_cluster(cluster_id={pdict['cluster_id']})"
     task_id = general_task_mgr.create_task('create_sr_cluster', task_name, {'cluster_id': pdict['cluster_id']})
 
@@ -2312,7 +2337,8 @@ def allot_one_vip(req):
         used_vip_list = [int(IPv4Address(row['vip'])) for row in used_rows]
 
     # check used count
-    free_numbers = (end_ip_int - start_ip_int) - len(used_rows)
+    count_number = end_ip_int - start_ip_int + 1
+    free_numbers = count_number - len(used_rows)
     if not free_numbers:
         return 400, "No vip can be allot from this vip pool."
 

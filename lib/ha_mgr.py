@@ -1176,7 +1176,7 @@ def polar_switch(task_id, cluster_id, new_pri_db_id, old_pri_db_id):
         try:
             rpc_utils.check_and_add_vip(new_pri_db_dict['host'], vip)
             # update clup_used_vip
-            dbapi.execute("UPDATE clup_used_vip SET db_id=%s,used_reason=1 WHERE vip = %s", (new_pri_db_id['db_id'], vip))
+            dbapi.execute("UPDATE clup_used_vip SET db_id=%s,used_reason=1 WHERE vip = %s", (new_pri_db_id, vip))
             log_info(task_id, f"{pre_msg}: add primary vip({vip}) to new primary({new_pri_db_dict['host']}) completed.")
         except Exception:
             log_error(task_id, f"{pre_msg}: add vip ({vip}) with unexpected error "

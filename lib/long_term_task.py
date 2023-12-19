@@ -684,11 +684,11 @@ def create_sr_cluster(task_id, cluster_id, pdict):
             return -1, err_msg
         primary_db_id = rows[0]['db_id']
 
-        # insert vip infor
-        insert_vip_sql = "INSERT INTO clup_used_vip(pool_id, vip, db_id, cluster_id, used_reason) values(%s, %s, %s, %s, 1) RETURNING vip"
-        insert_vip_row = dbapi.query(insert_vip_sql, (pdict['pool_id'], pdict['vip'], primary_db_id, cluster_id))
-        if not insert_vip_row:
-            return -1, f"Execute sql({insert_vip_sql}) failed."
+        # update clup_used_vip
+        update_vip_sql = "UPDATE clup_used_vip SET db_id=%s,used_reason=1 WHERE vip=%s RETURNING vip"
+        update_vip_row = dbapi.query(update_vip_sql, (primary_db_id, pdict['vip']))
+        if not update_vip_row:
+            return -1, f"Execute sql({update_vip_sql}) failed."
 
         # 开始创建主库
         general_task_mgr.log_info(task_id, f'{pre_msg}: create primary db (db_id: {primary_db_id})')
@@ -1354,6 +1354,12 @@ def create_polar_sd_cluster(task_id, cluster_id, pdict):
             err_msg = 'Failed to insert database information into clup_db.'
             return -1, err_msg
         primary_db_id = rows[0]['db_id']
+
+        # update clup_used_vip
+        update_vip_sql = "UPDATE clup_used_vip SET db_id=%s,used_reason=1 WHERE vip=%s RETURNING vip"
+        update_vip_row = dbapi.query(update_vip_sql, (primary_db_id, pdict['vip']))
+        if not update_vip_row:
+            return -1, f"Execute sql({update_vip_sql}) failed."
 
         # 开始创建主库
         general_task_mgr.log_info(task_id, f'{pre_msg}: create primary db (db_id: {primary_db_id})')
