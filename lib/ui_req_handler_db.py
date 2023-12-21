@@ -2042,3 +2042,142 @@ def modify_vip_on_host(req):
             return 400, f"Excute sql({sql}) failed."
 
     return 200, "Success"
+
+
+def get_db_pg_hba(req):
+    """获取数据库的pg_hba设置
+    """
+    params = {
+        "db_id": csu_http.MANDATORY,
+        "page_size": csu_http.INT,
+        "page_num": csu_http.INT
+    }
+
+    # check request params
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    # check the pg_version,support PG10 and last version
+    sql = "SELECT db_detail->'version' as version FROM clup_db WHERE db_id = %s"
+    rows = dbapi.query(sql, (pdict['db_id'], ))
+    if not rows:
+        return 400, "Check the pg_version failed."
+    pg_version = rows[0]['version']
+    if float(pg_version) < 10:
+        return 400, "Only support for pg_version 10 or later."
+
+    # get the db info
+    db_conn_info = dao.get_db_conn_info(pdict['db_id'])
+    if not db_conn_info:
+        return 400, f"Cant find any records for db_id={pdict['db_id']}."
+
+    # connect the database
+    db_conn = dao.get_db_conn(db_conn_info)
+    if isinstance(db_conn, str):
+        return 400, db_conn
+
+    # query pg_hba info from the database
+    offset = (pdict['page_num'] - 1) * pdict['page_size']
+    sql = "SELECT * FROM pg_hba_file_rules OFFSET %s LIMIT %s"
+    rows = dao.sql_query(db_conn, sql, (offset, pdict['page_size']))
+    if not rows:
+        return 400, f"Execute sql({sql}) on database(db_id={pdict['db_id']}) failed."
+    ret_list = [dict(row) for row in rows]
+
+    # query database names and user names from the database
+    code, db_names = dao.get_db_names(db_conn)
+    if code != 0:
+        return 400, db_names
+    code, user_names = dao.get_user_names(db_conn)
+    if code != 0:
+        return 400, user_names
+
+    ret_dict = {
+        "pg_hba_rules": ret_list,
+        "db_names": [row['datname'] for row in db_names],
+        "user_names": [row['usename'] for row in user_names],
+        "total": len(ret_list)
+    }
+
+    return 200, json.dumps(ret_dict)
+
+
+def delete_one_pg_hba(req):
+    """删除一条数据库pg_hba设置
+    """
+    params = {
+        "db_id": csu_http.INT,
+        "line_number": csu_http.INT,
+        "is_reload": csu_http.INT
+    }
+
+    # check request params
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    # get the database infor
+    sql = "SELECT host, pgdata FROM clup_db WHERE db_id=%s"
+    rows = dbapi.query(sql, (pdict['db_id'], ))
+    if not rows:
+        return 400, f"Cant find any records for database(db_id={pdict['db_id']})."
+    db_info = rows[0]
+
+    rpc = None
+    try:
+        # connect the host
+        code, result = rpc_utils.get_rpc_connect(db_info['host'])
+        if code != 0 or isinstance(result, str):
+            return 400, f"Connect the host({db_info['host']}) failed, {result}."
+        rpc = result
+
+        # delete from pg_hba.conf file
+        hba_file = f"{db_info['pgdata']}/pg_hba.conf"
+        if not rpc.os_path_exists(hba_file):
+            return 400, f"The file({hba_file}) is not exists."
+        del_line_number = pdict['line_number']
+        del_cmd = f"sed -i '{del_line_number}d' {hba_file}"
+        code, err_msg, _out_msg = rpc.run_cmd_result(del_cmd)
+        if code != 0:
+            return 400, f"Delete line({del_line_number}) from file({hba_file}) failed, {err_msg}."
+
+        if pdict["is_reload"]:
+            code, result = pg_db_lib.reload(db_info["host"], db_info["pgdata"])
+            if code != 0:
+                return 400, f"Reload the database failed, {result}."
+
+    except Exception as e:
+        return 400, f"Delete from pg_hba.conf with unexpected error, {str(e)}."
+    finally:
+        if rpc:
+            rpc.close()
+
+    return 200, "Success"
+
+
+def update_pg_hba(req):
+    """更新一条数据库pg_hba设置
+    """
+    params = {
+        "db_id": csu_http.INT,
+        "option": csu_http.MANDATORY,
+        "conf_dict": csu_http.MANDATORY,
+        "is_reload": csu_http.INT,
+        "line_number": 0
+    }
+
+    # check request params
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    code, result = dao.update_pg_hba(pdict, option=pdict["option"])
+    if code != 0:
+        return 400, result
+
+    return 200, "Success"
+
+
+
+
