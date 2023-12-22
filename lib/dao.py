@@ -896,6 +896,31 @@ def get_clients_dict_by_thread(nodes_ip_list: list, max_thread_num: int = 10, co
     return {node_ip: thread.result() for node_ip, thread in get_client_threads_list}
 
 
+def get_pg_ident(db_conn, host):
+    # get the ident_file path
+    sql = "SELECT setting FROM pg_settings WHERE name=%s"
+    rows = sql_query(db_conn, sql, ('ident_file', ))
+    if not rows:
+        return -1, f"Execute sql({sql}) failed."
+    ident_file = rows[0]["setting"]
+
+    # read the file content
+    code, result = rpc_utils.read_config_file(host, ident_file)
+    if code != 0:
+        return -1, f"Read the file({ident_file}) content from host({host}) failed, {result}."
+    ident_content = str(result, encoding='utf-8')
+
+    # filter content
+    ident_content_list = list()
+    for content in ident_content.split("\n"):
+        content = content.strip("\n")
+        if content.startswith("#") or not len(content):
+            continue
+        ident_content_list.append(content)
+
+    return 0, ident_content_list
+
+
 def get_db_names(db_conn):
     sql = "SELECT oid, datname FROM pg_database"
     rows = sql_query(db_conn, sql)
@@ -977,19 +1002,37 @@ def update_pg_hba(pdict, option="update"):
 
         # may be need modify pg_ident.conf
         if pg_indet_str:
+            need_add = True
+
+            # get the db_conn
             db_conn_info = get_db_conn_info(pdict['db_id'])
             db_conn = get_db_conn(db_conn_info)
-            sql = "SELECT setting FROM pg_settings WHERE name = %s"
-            rows = sql_query(db_conn, sql, ('ident_file', ))
-            if not rows:
-                return -1, f"Execute sql({sql}) failed."
-            ident_file = rows[0]["setting"]
 
-            # add content to pg_ident.conf
-            cmd = f"echo '{pg_indet_str}' >> {ident_file}"
-            code, err_msg, _out_msg = rpc.run_cmd_result(cmd)
-            if code != 0:
-                return -1, f"Add content to file({ident_file}) failed, {err_msg}."
+            # get the ident content,if not get the content,no care
+            ident_content_list = list()
+            code, result = get_pg_ident(db_conn, db_info["host"])
+            if code == 0:
+                ident_content_list = result
+
+            # check the map_user is exists in ident content
+            for ident_content in ident_content_list:
+                if ','.join(pg_indet_str.split()) == ','.join(ident_content.split()):
+                    need_add = False
+                    break
+
+            if need_add:
+                # get the ident_file path
+                sql = "SELECT setting FROM pg_settings WHERE name = %s"
+                rows = sql_query(db_conn, sql, ('ident_file', ))
+                if not rows:
+                    return -1, f"Execute sql({sql}) failed."
+                ident_file = rows[0]["setting"]
+
+                # add content to pg_ident.conf
+                cmd = f"echo '{pg_indet_str}' >> {ident_file}"
+                code, err_msg, _out_msg = rpc.run_cmd_result(cmd)
+                if code != 0:
+                    return -1, f"Add content to file({ident_file}) failed, {err_msg}."
 
         if pdict["is_reload"]:
             code, result = pg_db_lib.reload(db_info["host"], db_info["pgdata"])
@@ -998,5 +1041,8 @@ def update_pg_hba(pdict, option="update"):
 
     except Exception as e:
         return -1, f"Update for pg_hba.conf with unexpected error, {str(e)}."
+    finally:
+        if rpc:
+            rpc.close()
 
     return 0, "Success"

@@ -2085,6 +2085,22 @@ def get_db_pg_hba(req):
         return 400, f"Execute sql({sql}) on database(db_id={pdict['db_id']}) failed."
     ret_list = [dict(row) for row in rows]
 
+    # check and get the ident info
+    ident_content_list = list()
+    for hba_row in ret_list:
+        if hba_row["options"] and "map=" in hba_row["options"][0]:
+            map_user = hba_row["options"][0].split("map=")[-1].strip()
+            if not ident_content_list:
+                code, result = dao.get_pg_ident(db_conn, db_conn_info["host"])
+                if code != 0:
+                    # if not get the content,no care
+                    continue
+                ident_content_list = result
+
+            for ident_content in ident_content_list:
+                if map_user in ident_content:
+                    hba_row["pg_ident"] = ident_content.split()
+
     # query database names and user names from the database
     code, db_names = dao.get_db_names(db_conn)
     if code != 0:
@@ -2177,7 +2193,3 @@ def update_pg_hba(req):
         return 400, result
 
     return 200, "Success"
-
-
-
-
