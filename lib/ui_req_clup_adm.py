@@ -349,7 +349,6 @@ def get_pg_settings(req):
     sql = "SELECT DISTINCT(pg_version), COUNT(*) FROM clup_pg_settings group by pg_version"
     rows = dbapi.query(sql)
     setted_dict = {
-        9: False,
         10: False,
         11: False,
         12: False,
@@ -366,19 +365,19 @@ def get_pg_settings(req):
     try:
         if pdict.get("pg_version"):
             search_sql = "SELECT DISTINCT(db_id), host, pgdata, db_detail->>'version' as version FROM clup_db"
+
+            where_cond = " WHERE SUBSTRING(db_detail->>'version', 1, POSITION('.' IN db_detail->>'version') - 1) = %(pg_version)s"
             if pdict.get("filter"):
-                where_cond = """ WHERE FLOOR((db_detail->>'version')::numeric) = %(pg_version)s
-                AND cast(db_id AS varchar) like %(filter)s OR host like %(filter)s group by db_id
-                """
+                where_cond = f" {where_cond} AND cast(db_id AS varchar) like %(filter)s OR host like %(filter)s group by db_id"
             else:
-                where_cond = "WHERE FLOOR((db_detail->>'version')::numeric) = %(pg_version)s group by db_id"
+                where_cond = f" {where_cond} group by db_id"
 
             # search result and pages set
             pdict['offset'] = (pdict['page_num'] - 1) * pdict['page_size']
             page_cond = " ORDER BY db_id OFFSET %(offset)s LIMIT %(page_size)s"
             rows = dbapi.query(f"{search_sql} {where_cond} {page_cond}", pdict)
             if not rows:
-                return 400, f"No records were found for pg_version={pdict['pg_version']}."
+                return 400, f"There no database records were found for pg_version={pdict['pg_version']}."
 
             # just return the database which is running
             ret_dict["db_info_list"] = list()
@@ -413,7 +412,8 @@ def update_pg_settings(req):
     db_dict = rows[0]
 
     db_version = db_dict['version']
-    if int(float(db_version)) != int(pdict['pg_version']):
+    major_version = int(db_version.split(".")[0])
+    if major_version != int(pdict['pg_version']):
         return 400, f"The database(db_id={pdict['db_id']}) version is {db_version},which is not allow to set for {pdict['pg_version']}."
 
     # Delete the old settings
