@@ -1069,9 +1069,11 @@ def update_pg_hba(pdict, option="update"):
             conf_str = f"{conf_str}{','.join(value)}\t"
         elif key == "user_name":
             conf_str = f"{conf_str}{','.join(value)}\t"
-        # elif key == "address":
-        #     address = value
-        #     conf_str = f"{conf_str}{address}\t"
+        elif key == "address":
+            address = value
+            if pdict['option'] == "update" and "/" in address:
+                address = '\/'.join(address.split("/"))
+            conf_str = f"{conf_str}{address}\t"
         elif key == "pg_ident":
             pg_indet_str = value
         else:
