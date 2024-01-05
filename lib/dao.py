@@ -942,6 +942,113 @@ def get_user_names(db_conn):
     return 0, ret_list
 
 
+def get_pg_hba(db_id, db_conn=None, offset=None, limit=None):
+    # check the pg_version,support PG10 and last version
+    sql = "SELECT db_detail->'version' as version FROM clup_db WHERE db_id = %s"
+    rows = dbapi.query(sql, (db_id, ))
+    if not rows:
+        return -1, "Check the pg_version failed."
+    pg_version = rows[0]['version']
+    if float(pg_version) < 10:
+        return -1, "Only support for pg_version 10 or later."
+
+    try:
+        need_close = False
+        if not db_conn:
+            # get the db info
+            db_conn_info = get_db_conn_info(db_id)
+            if not db_conn_info:
+                return -1, f"Cant find any records for db_id={db_id}."
+
+            # connect the database
+            db_conn = get_db_conn(db_conn_info)
+            if isinstance(db_conn, str):
+                return -1, db_conn
+
+            need_close = True
+
+        # query pg_hba info from the database
+        sql = "SELECT * FROM pg_hba_file_rules OFFSET %s LIMIT %s"
+        rows = sql_query(db_conn, sql, (offset, limit))
+        if not rows:
+            return -1, f"Execute sql({sql}) on database(db_id={db_id}) failed."
+        ret_list = [dict(row) for row in rows]
+
+    except Exception as e:
+        return -1, f"Search pg_hba rules with unexpected error, {str(e)}."
+    finally:
+        if need_close:
+            db_conn.close()
+
+    return 0, ret_list
+
+
+def delete_one_pg_hba(host, pgdata, line_number, is_reload=True):
+    rpc = None
+    try:
+        # connect the host
+        code, result = rpc_utils.get_rpc_connect(host)
+        if code != 0 or isinstance(result, str):
+            return -1, f"Connect the host({host}) failed, {result}."
+        rpc = result
+
+        # delete from pg_hba.conf file
+        hba_file = f"{pgdata}/pg_hba.conf"
+        if not rpc.os_path_exists(hba_file):
+            return -1, f"The file({hba_file}) is not exists."
+        del_line_number = line_number
+        del_cmd = f"sed -i '{del_line_number}d' {hba_file}"
+        code, err_msg, _out_msg = rpc.run_cmd_result(del_cmd)
+        if code != 0:
+            return -1, f"Delete line({del_line_number}) from file({hba_file}) failed, {err_msg}."
+
+        if is_reload:
+            code, result = pg_db_lib.reload(host, pgdata)
+            if code != 0:
+                return -1, f"Reload the database failed, {result}."
+
+    except Exception as e:
+        return -1, f"Delete from pg_hba.conf with unexpected error, {str(e)}."
+    finally:
+        if rpc:
+            rpc.close()
+
+    return 0, "Success"
+
+
+def check_pg_hba(db_id):
+    """检查pg_hba文件，如果有错误，则删除掉这一行，执行reload，然后返回错误信息
+    """
+    # get the pg_hba list
+    code, result = get_pg_hba(db_id)
+    if code != 0:
+        return -1, result
+
+    # check error
+    error_list = [hba_dict for hba_dict in result if hba_dict["error"]]
+    if error_list:
+        # get the database infor
+        sql = "SELECT host, pgdata FROM clup_db WHERE db_id=%s"
+        rows = dbapi.query(sql, (db_id, ))
+        if not rows:
+            return -1, f"Cant find any records from clup_db, where db_id={db_id}."
+
+        host = rows[0]['host']
+        pgdata = rows[0]['pgdata']
+
+        for index in range(len(error_list)):
+            is_reload = False
+            if index == len(error_list) - 1:
+                is_reload = True
+            # delete from pg_hba
+            code, result = delete_one_pg_hba(host, pgdata, error_list[index]['line_number'], is_reload)
+            if code != 0:
+                return -1, result
+        # return error_list
+        return 1, error_list
+    return 0, "Check over!"
+
+
 def update_pg_hba(pdict, option="update"):
     # get the db infor
     sql = "SELECT host, pgdata FROM clup_db WHERE db_id=%s"
@@ -962,13 +1069,9 @@ def update_pg_hba(pdict, option="update"):
             conf_str = f"{conf_str}{','.join(value)}\t"
         elif key == "user_name":
             conf_str = f"{conf_str}{','.join(value)}\t"
-        elif key == "address":
-            address = value
-            # "ip/netmask_len" => "ip\/netmask_len"
-            if "/" in value:
-                value_split = value.split("/")
-                address = f"{value_split[0]}\/{value_split[1]}"
-            conf_str = f"{conf_str}{address}\t"
+        # elif key == "address":
+        #     address = value
+        #     conf_str = f"{conf_str}{address}\t"
         elif key == "pg_ident":
             pg_indet_str = value
         else:
@@ -1000,6 +1103,12 @@ def update_pg_hba(pdict, option="update"):
             if code != 0:
                 return -1, f"Add content to file({hba_file}) failed, {err_msg}."
 
+        # check pg_hba,is has error,delete the line
+        code, result = check_pg_hba(pdict['db_id'])
+        if code == 1:
+            ret_error = ','.join([hba_dict['error'] for hba_dict in result])
+            return -1, ret_error
+
         # may be need modify pg_ident.conf
         if pg_indet_str:
             need_add = True
@@ -1007,6 +1116,8 @@ def update_pg_hba(pdict, option="update"):
             # get the db_conn
             db_conn_info = get_db_conn_info(pdict['db_id'])
             db_conn = get_db_conn(db_conn_info)
+            if isinstance(db_conn, str):
+                return -1, db_conn
 
             # get the ident content,if not get the content,no care
             ident_content_list = list()
@@ -1033,7 +1144,7 @@ def update_pg_hba(pdict, option="update"):
                 code, err_msg, _out_msg = rpc.run_cmd_result(cmd)
                 if code != 0:
                     return -1, f"Add content to file({ident_file}) failed, {err_msg}."
-
+            db_conn.close()
         if pdict["is_reload"]:
             code, result = pg_db_lib.reload(db_info["host"], db_info["pgdata"])
             if code != 0:
