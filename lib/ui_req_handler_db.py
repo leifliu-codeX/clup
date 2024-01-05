@@ -27,6 +27,7 @@ import copy
 import json
 import logging
 import re
+import time
 
 import cluster_state
 import config
@@ -2049,8 +2050,8 @@ def get_db_pg_hba(req):
     """
     params = {
         "db_id": csu_http.MANDATORY,
-        "page_size": csu_http.INT,
-        "page_num": csu_http.INT
+        "page_num": csu_http.INT,
+        "page_size": csu_http.INT
     }
 
     # check request params
@@ -2058,48 +2059,43 @@ def get_db_pg_hba(req):
     if err_code != 0:
         return 400, pdict
 
-    # check the pg_version,support PG10 and last version
-    sql = "SELECT db_detail->'version' as version FROM clup_db WHERE db_id = %s"
-    rows = dbapi.query(sql, (pdict['db_id'], ))
-    if not rows:
-        return 400, "Check the pg_version failed."
-    pg_version = rows[0]['version']
-    if float(pg_version) < 10:
-        return 400, "Only support for pg_version 10 or later."
+    try:
+        # get the db info
+        db_conn_info = dao.get_db_conn_info(pdict['db_id'])
+        if not db_conn_info:
+            return 400, f"Cant find any records for db_id={pdict['db_id']}."
 
-    # get the db info
-    db_conn_info = dao.get_db_conn_info(pdict['db_id'])
-    if not db_conn_info:
-        return 400, f"Cant find any records for db_id={pdict['db_id']}."
+        # connect the database
+        db_conn = dao.get_db_conn(db_conn_info)
+        if isinstance(db_conn, str):
+            return 400, db_conn
+    except Exception as e:
+        return 400, f"Connect the database with unexpected error, {str(e)}."
 
-    # connect the database
-    db_conn = dao.get_db_conn(db_conn_info)
-    if isinstance(db_conn, str):
-        return 400, db_conn
-
-    # query pg_hba info from the database
+    # search infor from pg_hba_file_rules
     offset = (pdict['page_num'] - 1) * pdict['page_size']
-    sql = "SELECT * FROM pg_hba_file_rules OFFSET %s LIMIT %s"
-    rows = dao.sql_query(db_conn, sql, (offset, pdict['page_size']))
-    if not rows:
-        return 400, f"Execute sql({sql}) on database(db_id={pdict['db_id']}) failed."
-    ret_list = [dict(row) for row in rows]
+    code, ret_list = dao.get_pg_hba(pdict['db_id'], db_conn, offset, pdict['page_size'])
+    if code != 0:
+        return 400, ret_list
 
-    # check and get the ident info
-    ident_content_list = list()
-    for hba_row in ret_list:
-        if hba_row["options"] and "map=" in hba_row["options"][0]:
-            map_user = hba_row["options"][0].split("map=")[-1].strip()
-            if not ident_content_list:
-                code, result = dao.get_pg_ident(db_conn, db_conn_info["host"])
-                if code != 0:
-                    # if not get the content,no care
-                    continue
-                ident_content_list = result
+    try:
+        # check and get the ident info
+        ident_content_list = list()
+        for hba_row in ret_list:
+            if hba_row["options"] and "map=" in hba_row["options"][0]:
+                map_user = hba_row["options"][0].split("map=")[-1].strip()
+                if not ident_content_list:
+                    code, result = dao.get_pg_ident(db_conn, db_conn_info["host"])
+                    if code != 0:
+                        # if not get the content,no care
+                        continue
+                    ident_content_list = result
 
-            for ident_content in ident_content_list:
-                if map_user in ident_content:
-                    hba_row["pg_ident"] = ident_content.split()
+                for ident_content in ident_content_list:
+                    if map_user in ident_content:
+                        hba_row["pg_ident"] = ident_content.split()
+    except Exception as e:
+            return 400, f"Get the pg_ident information with unexpected error, {str(e)}."
 
     # query database names and user names from the database
     code, db_names = dao.get_db_names(db_conn)
@@ -2108,6 +2104,9 @@ def get_db_pg_hba(req):
     code, user_names = dao.get_user_names(db_conn)
     if code != 0:
         return 400, user_names
+    # close the db_conn
+    if db_conn:
+        db_conn.close()
 
     ret_dict = {
         "pg_hba_rules": ret_list,
@@ -2140,34 +2139,11 @@ def delete_one_pg_hba(req):
         return 400, f"Cant find any records for database(db_id={pdict['db_id']})."
     db_info = rows[0]
 
-    rpc = None
-    try:
-        # connect the host
-        code, result = rpc_utils.get_rpc_connect(db_info['host'])
-        if code != 0 or isinstance(result, str):
-            return 400, f"Connect the host({db_info['host']}) failed, {result}."
-        rpc = result
-
-        # delete from pg_hba.conf file
-        hba_file = f"{db_info['pgdata']}/pg_hba.conf"
-        if not rpc.os_path_exists(hba_file):
-            return 400, f"The file({hba_file}) is not exists."
-        del_line_number = pdict['line_number']
-        del_cmd = f"sed -i '{del_line_number}d' {hba_file}"
-        code, err_msg, _out_msg = rpc.run_cmd_result(del_cmd)
-        if code != 0:
-            return 400, f"Delete line({del_line_number}) from file({hba_file}) failed, {err_msg}."
-
-        if pdict["is_reload"]:
-            code, result = pg_db_lib.reload(db_info["host"], db_info["pgdata"])
-            if code != 0:
-                return 400, f"Reload the database failed, {result}."
-
-    except Exception as e:
-        return 400, f"Delete from pg_hba.conf with unexpected error, {str(e)}."
-    finally:
-        if rpc:
-            rpc.close()
+    # delete from pg_hba
+    code, result = dao.delete_one_pg_hba(db_info['host'], db_info['pgdata'],
+                                        pdict['line_number'], pdict['is_reload'])
+    if code != 0:
+        return 400, result
 
     return 200, "Success"
 
@@ -2188,8 +2164,187 @@ def update_pg_hba(req):
     if err_code != 0:
         return 400, pdict
 
+    # update pg_hba
     code, result = dao.update_pg_hba(pdict, option=pdict["option"])
     if code != 0:
         return 400, result
 
     return 200, "Success"
+
+
+def get_pg_log_file_list(req):
+    """获取pg日志文件列表
+    """
+    params = {
+        "db_id": csu_http.INT,
+        "page_num": csu_http.INT,
+        "page_size": csu_http.INT
+    }
+
+    # check request params
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    # get the log_info
+    rpc = None
+    try:
+        db_conn_info = dao.get_db_conn_info(pdict['db_id'])
+
+        # get the host connection
+        code, result = rpc_utils.get_rpc_connect(db_conn_info["host"])
+        if code != 0:
+            return 400, f"Connect the host({db_conn_info['host']}) failed, {result}."
+        rpc = result
+
+        # if can connect the database,get log_info from pg_settings,else read from conf files
+        if db_conn_info:
+            # connect the database
+            db_conn = dao.get_db_conn(db_conn_info)
+            if isinstance(db_conn, str):
+                return 400, db_conn
+
+            # get the log_info
+            sql = "SELECT name, setting FROM pg_settings WHERE name in ('log_directory', 'log_destination', 'data_directory')"
+            rows = dao.sql_query(db_conn, sql)
+            if not rows:
+                return 400, f"Execute sql({sql}) failed."
+            log_info = {row["name"]: row["setting"] for row in rows}
+        else:
+            # read conf files to get the log_info
+            sql = "SELECT pgdata FROM clup_db WHERE db_id=%s"
+            rows = dbapi.query(sql, (pdict['db_id'], ))
+            if not rows:
+                return 400, f"Cant find any records for db_id={pdict['db_id']}."
+            pgdata = rows[0]['pgdata']
+
+            log_info = {
+                'log_directory': 'log',
+                'log_destination': 'stderr',
+                'data_directory': pgdata
+            }
+            setting_list = ['log_directory', 'log_destination']
+
+            postgresql_conf = f"{pgdata}/postgresql.conf"
+            postgresql_auto_conf = f"{pgdata}/postgresql.auto.conf"
+            # read from postgresql.conf
+            code, item_dict = rpc.read_config_file_items(postgresql_conf, setting_list)
+            if code != 0:
+                return 400, f"Cant read the settings values from {postgresql_conf}, {item_dict}."
+            log_info.update(item_dict)
+
+            # read from postgresql.auto.conf and update log_info
+            code, item_dict = rpc.read_config_file_items(postgresql_auto_conf, setting_list)
+            if code == 0:
+                log_info.update(item_dict)
+
+    except Exception as e:
+        return 400, f"Get the log settings with unexpected error, {str(e)}."
+
+    # get the log file list
+    try:
+        ret_list = list()
+        pgdata = log_info['data_directory']
+        log_directory = log_info["log_directory"]
+        if not log_info["log_directory"].startswith("/"):
+            log_directory = f"{pgdata}/{log_info['log_directory']}"
+
+        # get the file_list_info
+        file_list = rpc.os_listdir(log_directory)
+        if not file_list:
+            file_list = list()
+
+        # get the file info
+        if log_info["log_destination"] == "csvlog":
+            filter_str = ".csv"
+            file_list = [file for file in file_list if file.endswith(filter_str)]
+        for file in file_list:
+            file_path = f"{log_directory}/{file}"
+            code, file_info = rpc.os_stat(file_path)
+            if code != 0:
+                ret_list.append(dict())
+                continue
+            file_ctime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(file_info["st_ctime"]))
+            ret_list.append({"file": file, "st_ctime": file_ctime, "st_size": file_info["st_size"]})
+
+    except Exception as e:
+        return 400, f"Get the file information with unexpected error, {str(e)}."
+    finally:
+        if rpc:
+            rpc.close()
+
+    page_start = (pdict["page_num"] - 1) * pdict["page_size"]
+    page_end = page_start + pdict["page_size"]
+    ret_dict = {
+        "total": len(ret_list),
+        "log_directory": log_directory,
+        "log_destination": log_info["log_destination"],
+        "file_info_list": ret_list[page_start:page_end]
+    }
+
+    return 200, json.dumps(ret_dict)
+
+
+def get_pg_log_content(req):
+    """获取pg日志文件内容
+    """
+    params = {
+        "db_id": csu_http.INT,
+        "page_num": csu_http.INT,
+        "file_name": csu_http.MANDATORY,
+        "log_directory": csu_http.MANDATORY,
+        "log_destination": csu_http.MANDATORY
+    }
+
+    # check request params
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    # get the db_info
+    sql = "SELECT host, pgdata FROM clup_db WHERE db_id=%s"
+    rows = dbapi.query(sql, (pdict["db_id"], ))
+    if not rows:
+        return 400, f"Cant find any records for db_id={pdict['db_id']}."
+    db_info = rows[0]
+
+    # read the log_file content
+    log_file_path = f"{pdict['log_directory']}/{pdict['file_name']}"
+    rpc = None
+    try:
+        read_size = 2048  # bytes
+
+        # connect the host
+        code, result = rpc_utils.get_rpc_connect(db_info["host"])
+        if code != 0:
+            return 400, f"Connect the host({db_info['host']}) failed, {result}."
+        rpc = result
+
+        # get the file size
+        code, result = rpc.os_stat(log_file_path)
+        if code != 0:
+            return 400, f"Get the file({log_file_path}) stat failed, {result}."
+        file_size = result["st_size"]  # unit bytes
+
+        # read the file cotent,one step read 1Kb
+        offset = (pdict["page_num"] - 1) * read_size
+        code, content = rpc.os_read_file(log_file_path, offset, read_size)
+        if code != 0:
+            return 400, f"Read the file({log_file_path}) content failed, {content}."
+
+        page_count = file_size // read_size
+        if page_count * read_size < file_size:
+            page_count += 1
+
+        ret_dict = {
+            "total": page_count,
+            "content": str(content, encoding="utf-8")
+        }
+
+    except Exception as e:
+        return 400, f"Get the log file content with unexpected error, {str(e)}."
+    finally:
+        if rpc:
+            rpc.close()
+
+    return 200, json.dumps(ret_dict)
