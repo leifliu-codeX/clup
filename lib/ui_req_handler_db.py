@@ -2074,7 +2074,7 @@ def get_db_pg_hba(req):
 
     # search infor from pg_hba_file_rules
     offset = (pdict['page_num'] - 1) * pdict['page_size']
-    code, ret_list = dao.get_pg_hba(pdict['db_id'], db_conn, offset, pdict['page_size'])
+    code, ret_list = pg_helpers.get_pg_hba(pdict['db_id'], db_conn, offset, pdict['page_size'])
     if code != 0:
         return 400, ret_list
 
@@ -2085,7 +2085,7 @@ def get_db_pg_hba(req):
             if hba_row["options"] and "map=" in hba_row["options"][0]:
                 map_user = hba_row["options"][0].split("map=")[-1].strip()
                 if not ident_content_list:
-                    code, result = dao.get_pg_ident(db_conn, db_conn_info["host"])
+                    code, result = pg_helpers.get_pg_ident(db_conn, db_conn_info["host"])
                     if code != 0:
                         # if not get the content,no care
                         continue
@@ -2098,10 +2098,10 @@ def get_db_pg_hba(req):
             return 400, f"Get the pg_ident information with unexpected error, {str(e)}."
 
     # query database names and user names from the database
-    code, db_names = dao.get_db_names(db_conn)
+    code, db_names = pg_helpers.get_db_names(db_conn)
     if code != 0:
         return 400, db_names
-    code, user_names = dao.get_user_names(db_conn)
+    code, user_names = pg_helpers.get_user_names(db_conn)
     if code != 0:
         return 400, user_names
     # close the db_conn
@@ -2140,7 +2140,7 @@ def delete_one_pg_hba(req):
     db_info = rows[0]
 
     # delete from pg_hba
-    code, result = dao.delete_one_pg_hba(db_info['host'], db_info['pgdata'],
+    code, result = pg_helpers.delete_one_pg_hba(db_info['host'], db_info['pgdata'],
                                         pdict['line_number'], pdict['is_reload'])
     if code != 0:
         return 400, result
@@ -2165,7 +2165,7 @@ def update_pg_hba(req):
         return 400, pdict
 
     # update pg_hba
-    code, result = dao.update_pg_hba(pdict, option=pdict["option"])
+    code, result = pg_helpers.update_pg_hba(pdict, option=pdict["option"])
     if code != 0:
         return 400, result
 

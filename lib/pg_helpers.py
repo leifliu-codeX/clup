@@ -1582,6 +1582,261 @@ def pretty_ms(val):
         return f'{val}ms'
 
 
+def get_pg_ident(db_conn, host):
+    # get the ident_file path
+    sql = "SELECT setting FROM pg_settings WHERE name=%s"
+    rows = dao.sql_query(db_conn, sql, ('ident_file', ))
+    if not rows:
+        return -1, f"Execute sql({sql}) failed."
+    ident_file = rows[0]["setting"]
 
-if __name__ == '__main__':
-    pass
+    # read the file content
+    code, result = rpc_utils.read_config_file(host, ident_file)
+    if code != 0:
+        return -1, f"Read the file({ident_file}) content from host({host}) failed, {result}."
+    ident_content = str(result, encoding='utf-8')
+
+    # filter content
+    ident_content_list = list()
+    for content in ident_content.split("\n"):
+        content = content.strip("\n")
+        if content.startswith("#") or not len(content):
+            continue
+        ident_content_list.append(content)
+
+    return 0, ident_content_list
+
+
+def get_db_names(db_conn):
+    sql = "SELECT oid, datname FROM pg_database"
+    rows = dao.sql_query(db_conn, sql)
+    if not rows:
+        return -1, "Get the database names failed."
+
+    filter_datnames = ['cs_sys_ha', 'template1', 'template0']
+    ret_list = [dict(row) for row in rows if row['datname'] not in filter_datnames]
+    return 0, ret_list
+
+
+def get_user_names(db_conn):
+    sql = "SELECT usename FROM pg_user"
+    rows = dao.sql_query(db_conn, sql)
+    if not rows:
+        return -1, "Get the user names failed."
+
+    ret_list = [dict(row) for row in rows]
+    return 0, ret_list
+
+
+def get_pg_hba(db_id, db_conn=None, offset=None, limit=None):
+    # check the pg_version,support PG10 and last version
+    sql = "SELECT db_detail->'version' as version FROM clup_db WHERE db_id = %s"
+    rows = dbapi.query(sql, (db_id, ))
+    if not rows:
+        return -1, "Check the pg_version failed."
+    pg_version = rows[0]['version']
+    if float(pg_version) < 10:
+        return -1, "Only support for pg_version 10 or later."
+
+    try:
+        need_close = False
+        if not db_conn:
+            # connect the database
+            code, result = get_db_conn(db_id)
+            if code != 0:
+                return -1, result
+            db_conn = result
+            need_close = True
+
+        # query pg_hba info from the database
+        sql = "SELECT * FROM pg_hba_file_rules OFFSET %s LIMIT %s"
+        rows = dao.sql_query(db_conn, sql, (offset, limit))
+        if not rows:
+            return -1, f"Execute sql({sql}) on database(db_id={db_id}) failed."
+        ret_list = [dict(row) for row in rows]
+
+    except Exception as e:
+        return -1, f"Search pg_hba rules with unexpected error, {str(e)}."
+    finally:
+        if need_close:
+            db_conn.close()
+
+    return 0, ret_list
+
+
+def delete_one_pg_hba(host, pgdata, line_number, is_reload=True):
+    rpc = None
+    try:
+        # connect the host
+        code, result = rpc_utils.get_rpc_connect(host)
+        if code != 0 or isinstance(result, str):
+            return -1, f"Connect the host({host}) failed, {result}."
+        rpc = result
+
+        # delete from pg_hba.conf file
+        hba_file = f"{pgdata}/pg_hba.conf"
+        if not rpc.os_path_exists(hba_file):
+            return -1, f"The file({hba_file}) is not exists."
+        del_line_number = line_number
+        del_cmd = f"sed -i '{del_line_number}d' {hba_file}"
+        code, err_msg, _out_msg = rpc.run_cmd_result(del_cmd)
+        if code != 0:
+            return -1, f"Delete line({del_line_number}) from file({hba_file}) failed, {err_msg}."
+
+        if is_reload:
+            code, result = pg_db_lib.reload(host, pgdata)
+            if code != 0:
+                return -1, f"Reload the database failed, {result}."
+
+    except Exception as e:
+        return -1, f"Delete from pg_hba.conf with unexpected error, {str(e)}."
+    finally:
+        if rpc:
+            rpc.close()
+
+    return 0, "Success"
+
+
+def check_pg_hba(db_id):
+    """检查pg_hba文件，如果有错误，则删除掉这一行，执行reload，然后返回错误信息
+    """
+    # get the pg_hba list
+    code, result = get_pg_hba(db_id)
+    if code != 0:
+        return -1, result
+
+    # check error
+    error_list = [hba_dict for hba_dict in result if hba_dict["error"]]
+    if error_list:
+        # get the database infor
+        sql = "SELECT host, pgdata FROM clup_db WHERE db_id=%s"
+        rows = dbapi.query(sql, (db_id, ))
+        if not rows:
+            return -1, f"Cant find any records from clup_db, where db_id={db_id}."
+
+        host = rows[0]['host']
+        pgdata = rows[0]['pgdata']
+
+        for index in range(len(error_list)):
+            is_reload = False
+            if index == len(error_list) - 1:
+                is_reload = True
+            # delete from pg_hba
+            code, result = delete_one_pg_hba(host, pgdata, error_list[index]['line_number'], is_reload)
+            if code != 0:
+                return -1, result
+        # return error_list
+        return 1, error_list
+    return 0, "Check over!"
+
+
+def update_pg_hba(pdict, option="update"):
+    # get the db infor
+    sql = "SELECT host, pgdata FROM clup_db WHERE db_id=%s"
+    rows = dbapi.query(sql, (pdict['db_id'], ))
+    if not rows:
+        return -1, f"Cant find any records for database(db_id={pdict['db_id']})."
+    db_info = rows[0]
+
+    # conf_dict to str
+    conf_str = ""
+    pg_indet_str = None
+    key_sort_list = ['type', 'database', 'user_name', 'address', 'netmask', 'auth_method', 'options', 'pg_ident']
+    for key in key_sort_list:
+        value = pdict['conf_dict'].get(key, None)
+        if not value:
+            continue
+        if key == "database":
+            conf_str = f"{conf_str}{','.join(value)}\t"
+        elif key == "user_name":
+            conf_str = f"{conf_str}{','.join(value)}\t"
+        elif key == "address":
+            address = value
+            if pdict['option'] == "update" and "/" in address:
+                address = '\/'.join(address.split("/"))
+            conf_str = f"{conf_str}{address}\t"
+        elif key == "pg_ident":
+            pg_indet_str = value
+        else:
+            conf_str = f"{conf_str}{value}\t"
+
+    rpc = None
+    try:
+        # connect the host
+        code, result = rpc_utils.get_rpc_connect(db_info["host"])
+        if code != 0:
+            return -1, f"Connect the host({db_info['host']}) failed, {result}."
+        rpc = result
+
+        # check the file is exists or not
+        hba_file = f"{db_info['pgdata']}/pg_hba.conf"
+        if not rpc.os_path_exists(hba_file):
+            return -1, f"The file({hba_file}) is not exists."
+
+        # replace the content for pg_hba.conf
+        if option == "update":
+            update_cmd = f"sed -i '{pdict['line_number']}s/.*/{conf_str}/' {hba_file}"
+            code, err_msg, _out_msg = rpc.run_cmd_result(update_cmd)
+            if code != 0:
+                return -1, f"Update content for file({hba_file}) failed, {err_msg}."
+        # add one record to pg_hba.conf
+        elif option == "add":
+            add_cmd = f"echo '{conf_str}' >> {hba_file}"
+            code, err_msg, _out_msg = rpc.run_cmd_result(add_cmd)
+            if code != 0:
+                return -1, f"Add content to file({hba_file}) failed, {err_msg}."
+
+        # check pg_hba,is has error,delete the line
+        code, result = check_pg_hba(pdict['db_id'])
+        if code == 1:
+            ret_error = ','.join([hba_dict['error'] for hba_dict in result])
+            return -1, ret_error
+
+        # may be need modify pg_ident.conf
+        if pg_indet_str:
+            need_add = True
+
+            # get the db_conn
+            code, result = get_db_conn(pdict['db_id'])
+            if code != 0:
+                return -1, result
+            db_conn = result
+
+            # get the ident content,if not get the content,no care
+            ident_content_list = list()
+            code, result = get_pg_ident(db_conn, db_info["host"])
+            if code == 0:
+                ident_content_list = result
+
+            # check the map_user is exists in ident content
+            for ident_content in ident_content_list:
+                if ','.join(pg_indet_str.split()) == ','.join(ident_content.split()):
+                    need_add = False
+                    break
+
+            if need_add:
+                # get the ident_file path
+                sql = "SELECT setting FROM pg_settings WHERE name = %s"
+                rows = dao.sql_query(db_conn, sql, ('ident_file', ))
+                if not rows:
+                    return -1, f"Execute sql({sql}) failed."
+                ident_file = rows[0]["setting"]
+
+                # add content to pg_ident.conf
+                cmd = f"echo '{pg_indet_str}' >> {ident_file}"
+                code, err_msg, _out_msg = rpc.run_cmd_result(cmd)
+                if code != 0:
+                    return -1, f"Add content to file({ident_file}) failed, {err_msg}."
+            db_conn.close()
+        if pdict["is_reload"]:
+            code, result = pg_db_lib.reload(db_info["host"], db_info["pgdata"])
+            if code != 0:
+                return -1, f"Reload the database failed, {result}."
+
+    except Exception as e:
+        return -1, f"Update for pg_hba.conf with unexpected error, {str(e)}."
+    finally:
+        if rpc:
+            rpc.close()
+
+    return 0, "Success"
