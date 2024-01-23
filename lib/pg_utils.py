@@ -67,7 +67,7 @@ def get_repl_delay(pri_db_host, pri_db_port, db_user, db_pass, cur_wal):
               f"    pg_wal_lsn_diff('{cur_wal}', write_lsn) as write_delay,\n"\
               f"    pg_wal_lsn_diff('{cur_wal}', flush_lsn) as flush_delay,\n"\
               f"    pg_wal_lsn_diff('{cur_wal}', replay_lsn) as replay_delay,\n" \
-              "    state,\n" \
+              "    state, sync_priority,\n" \
               "    sync_state as is_sync\n"\
               " from pg_stat_replication;"
     else:
@@ -77,7 +77,7 @@ def get_repl_delay(pri_db_host, pri_db_port, db_user, db_pass, cur_wal):
               f"    pg_xlog_location_diff('{cur_wal}', write_location) as write_delay,\n"\
               f"    pg_xlog_location_diff('{cur_wal}', flush_location) as flush_delay,\n"\
               f"    pg_xlog_location_diff('{cur_wal}', replay_location) as replay_delay,\n" \
-              "    state,\n" \
+              "    state, sync_priority,\n" \
               "    sync_state as is_sync\n"\
               " from pg_stat_replication;"
 

@@ -43,6 +43,8 @@ import polar_helpers
 import polar_lib
 import rpc_utils
 
+from ha_mgr import get_repl_delay as ha_mgr_get_repl_delay
+
 
 def start_db(req):
     params = {
@@ -2348,3 +2350,91 @@ def get_pg_log_content(req):
             rpc.close()
 
     return 200, json.dumps(ret_dict)
+
+
+def get_sync_repl_delay(req):
+    params = {
+        'cluster_id': csu_http.MANDATORY | csu_http.INT,
+    }
+
+    # 检查参数的合法性,如果成功,把参数放到一个字典中
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+    cluster_id = pdict['cluster_id']
+
+    err_code, data = ha_mgr_get_repl_delay(cluster_id)
+    if err_code != 0:
+        return 400, data
+
+    # remove the async
+    sync_state_list = ['sync', 'potential', 'quorum']
+    ret_data_list = list()
+    for sync_dict in data:
+        if sync_dict['is_sync'] in sync_state_list:
+            ret_data_list.append(sync_dict)
+
+    ret_data = {"total": len(data), "rows": ret_data_list}
+    raw_data = json.dumps(ret_data)
+    return 200, raw_data
+
+
+def get_child_node(req):
+    """获取子节点，一级备库节点信息
+
+    Args:
+        req (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+    params = {
+        'db_id': csu_http.INT
+    }
+
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    code, result = pg_helpers.get_child_node(pdict['db_id'])
+    if code != 0:
+        return 400, result
+
+    return 200, json.dumps({"rows": result})
+
+
+def enable_standby_sync(req):
+    params = {
+        'db_id': csu_http.INT,
+        'sync_mode': csu_http.MANDATORY,
+        'sync_method': csu_http.MANDATORY,
+        'standby_id_list': csu_http.MANDATORY,
+        'node_number': 0,
+    }
+
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    code, result = pg_helpers.enable_standby_sync(pdict)
+    if code != 0:
+        return 400, result
+
+    return 200, "Success"
+
+
+def disable_standby_sync(req):
+    params = {
+        'db_id': csu_http.INT
+    }
+
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    # reset setting
+    code, result = pg_helpers.disable_standby_sync(pdict['db_id'])
+    if code != 0:
+        return 400, result
+
+    return 200, "Success"

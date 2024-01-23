@@ -173,6 +173,7 @@ def get_repl_delay(cluster_id):
                 delay_row['is_sync'] = row['is_sync']
                 delay_row['repl_state'] = row['state']
                 delay_row['current_lsn'] = row['current_lsn']
+                delay_row['sync_priority'] = row['sync_priority']
                 is_find = True
                 if current_lsn == 'unknown':
                     current_lsn = row['current_lsn']
@@ -190,6 +191,7 @@ def get_repl_delay(cluster_id):
             delay_row['replay_delay'] = value
             delay_row['is_sync'] = value
             delay_row['repl_state'] = value
+            delay_row['sync_priority'] = value
         ret_data.append(delay_row)
 
     return 0, ret_data

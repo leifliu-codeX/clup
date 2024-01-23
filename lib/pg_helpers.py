@@ -1840,3 +1840,207 @@ def update_pg_hba(pdict, option="update"):
             rpc.close()
 
     return 0, "Success"
+
+
+def get_child_node(db_id):
+    # get the child standby
+    sql = "SELECT db_id, host, pgdata FROM clup_db WHERE up_db_id=%s"
+    rows = dbapi.query(sql, (db_id, ))
+    if not rows:
+        return 400, f"Cant find any child standby information for db_id={db_id}."
+    child_node_list = [dict(row) for row in rows]
+
+    # check the standby state
+    for db_dict in child_node_list:
+        code, result = pg_db_lib.is_running(db_dict['host'], db_dict['pgdata'])
+        if code != 0:
+            db_dict["db_state"] = database_state.STOP
+
+        if result:
+            db_dict["db_state"] = database_state.RUNNING
+        else:
+            db_dict["db_state"] = database_state.STOP
+
+        del db_dict['pgdata']
+
+    return 0, child_node_list
+
+
+def reset_db_conf(db_id, setting_name):
+    # get the db_conn
+    code, result = get_db_conn(db_id)
+    if code != 0:
+        return -1, f"Connect the database(db_id={db_id}) failed, {result}."
+    db_conn = result
+
+    try:
+        # reset the setting
+        sql = "ALTER SYSTEM RESET %s"
+        dao.sql_query(db_conn, sql, (setting_name, ))
+    except Exception:
+        return -1, f"Excute sql({sql}) with unexpected error, {traceback.format_exc()}."
+    finally:
+        db_conn.close()
+
+    return 0, "Success reset"
+
+
+def enable_standby_sync(pdict):
+    """开启同步复制
+
+    Args:
+        pdict (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+    db_info_list = pdict['standby_id_list'] + [pdict['db_id']]
+    # query standby db info
+    sql = "SELECT db_id, host FROM clup_db WHERE db_id in %s"
+    rows = dbapi.query(sql, (tuple(db_info_list), ))
+    if not rows:
+        return -1, f"Excute sql({sql}) failed."
+
+    # get the setting_value, primary priority must be lowest
+    setting_value = None
+    host_list = list()
+    primary_host = None
+    for row in rows:
+        if row['db_id'] == pdict['db_id']:
+            primary_host = '"%s"' % row['host']
+        else:
+            host_list.append('"%s"' % row['host'])
+    host_list.append(primary_host)
+    host_list_string = ','.join(host_list)
+    setting_name = "synchronous_standby_names"
+
+    # check the node_number
+    if pdict.get("node_number"):
+        if pdict['node_number'] < 1 and pdict['node_number'] > len(pdict['standby_id_list']):
+            return -1, f"The number {pdict['node_number']} is not in [1, {len(pdict['standby_id_list'])}]."
+        setting_value = f'{pdict["sync_method"]} {pdict["node_number"]} ({host_list_string})'
+    else:
+        return -1, f"The number({pdict['node_number']}) for {setting_name} is error."
+
+    # 修改数据库参数
+    need_reset = False
+    success_list = list()
+    for row in rows:
+        try:
+            db_conn = None
+            # get db_conn
+            code, db_conn = get_db_conn(row['db_id'])
+            if code != 0:
+                return -1, f"Connect the database(db_id={row['db_id']}) failed, {db_conn}."
+
+            # try to modify databse conf and reload
+            alter_sql = f"ALTER SYSTEM SET {setting_name} = %s"
+            dao.execute(db_conn, alter_sql, (setting_value, ))
+            success_list.append(row['db_id'])
+        except Exception:
+            need_reset = True
+            break
+        finally:
+            if db_conn:
+                db_conn.close()
+
+    if need_reset:
+        # rollback, reset the setting
+        failed_reset_list = list()
+        for db_id in success_list:
+            code, result = reset_db_conf(db_id, setting_name)
+            if code != 0:
+                failed_reset_list.append(f"db_id={db_id}: {result}")
+
+        if failed_reset_list:
+            return -1, f"Reset the setting({setting_name}) failed for {','.join(failed_reset_list)}, please check."
+
+        return -1, "Enable standby sync failed, already rollback."
+
+    # run pg_reload_conf(),just reload primary database
+    try:
+        db_conn = None
+        code, db_conn = get_db_conn(pdict['db_id'])
+        if code != 0:
+            return -1, f"Connect the database(db_id={pdict['db_id']}) failed, {db_conn}."
+        reload_sql = "SELECT pg_reload_conf()"
+        dao.execute(db_conn, reload_sql)
+    except Exception:
+        return -1, f"Excute sql({reload_sql}) with unexpected error, {traceback.format_exc()}."
+    finally:
+        if db_conn:
+            db_conn.close()
+
+    return 0, "Success"
+
+
+def disable_standby_sync(db_id):
+    # get child node list
+    code, result = get_child_node(db_id)
+    if code != 0:
+        return -1, result
+    standby_info_list = result
+
+    setting_value = None
+    reload_sql = "SELECT pg_reload_conf()"
+    reset_sql = "ALTER SYSTEM RESET synchronous_standby_names"
+
+    # get the setting value and reset on primary database
+    try:
+        db_conn = None
+        code, db_conn = get_db_conn(db_id)
+        if code != 0:
+            return -1, f"Connect the databse failed, {db_conn}."
+
+        # get the setting value
+        query_sql = "SELECT setting FROM pg_settings WHERE name='synchronous_standby_names'"
+        rows = dao.sql_query(db_conn, query_sql)
+        if not rows:
+            return -1, f"Excute sql({query_sql}) on db_id({db_id}) failed."
+
+        setting_value = rows[0]['setting']
+
+        # primary reset
+        dao.execute(db_conn, reset_sql)
+
+        # run pg_reload_conf() Tip: alter system cant in a transaction block
+        code, db_conn = get_db_conn(db_id)
+        dao.execute(db_conn, reload_sql)
+    except Exception:
+        return -1, f"Excute sql({reset_sql}) on the primary database with unexpected error, {traceback.format_exc()}."
+    finally:
+        if db_conn:
+            db_conn.close()
+
+    # reset on standby database
+    failed_list = list()
+    for db_info in standby_info_list:
+        # if standby host not in setting_value,continue
+        if db_info['host'] not in setting_value:
+            continue
+
+        if db_info['db_state'] != database_state.RUNNING:
+            failed_list.append(f"db_id={db_info['db_id']}: {db_info['host']}")
+            continue
+
+        try:
+            db_conn = None
+            # get the db_conn, alter system cant in a transaction block
+            code, db_conn = get_db_conn(db_info['db_id'])
+            if code != 0:
+                failed_list.append(f"db_id={db_info['db_id']}: {db_info['host']}")
+            dao.execute(db_conn, reset_sql)
+
+            # run pg_reload_conf() Tip: alter system cant in a transaction block
+            code, db_conn = get_db_conn(db_id)
+            dao.execute(db_conn, reload_sql)
+        except Exception:
+            failed_list.append(f"db_id={db_info['db_id']}: {db_info['host']}")
+        finally:
+            if db_conn:
+                db_conn.close()
+
+    if failed_list:
+        return -1, f"Excute sql({reset_sql}) failed on ({','.join(failed_list)})."
+
+    return 0, "Success"
