@@ -559,16 +559,17 @@ def get_all_db_list(req):
         row_cnt = rows[0]['cnt']
         ret_rows = []
         if row_cnt > 0:
-            sql = ("SELECT db_id, instance_name, host, is_primary, port, db_state,"
-                   " pgdata, db_type, cluster_id, cluster_type, clup_db.state,up_db_id,"
-                   " db_detail->>'instance_type' as instance_type, db_detail->>'version' as version,"
-                   " db_detail->>'os_user' as os_user, cluster_data ->> 'cluster_name' as cluster_name,"
-                   " db_detail->'is_exclusive' as is_exclusive,"
-                   " db_detail->>'db_user' as db_user, db_detail->>'db_pass' as db_pass,"
-                   " db_detail->>'repl_user' as repl_user, db_detail->>'repl_pass' as repl_pass,"
-                   " db_detail->>'polar_type' as polar_type"
-                  f" FROM clup_db LEFT JOIN clup_cluster USING (cluster_id) {where_cond} "
-                   " ORDER BY cluster_id,db_id LIMIT %(limit)s OFFSET %(offset)s")
+            sql = (
+                "SELECT db_id, instance_name, host, is_primary, port, db_state,"
+                " pgdata, db_type, cluster_id, cluster_type, clup_db.state,up_db_id,"
+                " db_detail->>'instance_type' as instance_type, db_detail->>'version' as version,"
+                " db_detail->>'os_user' as os_user, cluster_data ->> 'cluster_name' as cluster_name,"
+                " db_detail->'is_exclusive' as is_exclusive,"
+                " db_detail->>'db_user' as db_user, db_detail->>'db_pass' as db_pass,"
+                " db_detail->>'repl_user' as repl_user, db_detail->>'repl_pass' as repl_pass,"
+                " db_detail->>'polar_type' as polar_type"
+                f" FROM clup_db LEFT JOIN clup_cluster USING (cluster_id) {where_cond} "
+                " ORDER BY cluster_id,db_id LIMIT %(limit)s OFFSET %(offset)s")
             args['limit'] = page_size
             args['offset'] = offset
             ret_rows = dbp.query(sql, args)
@@ -999,7 +1000,6 @@ def get_db_session(req):
                     where_cond += ' AND '
                 where_cond += f'{cond_name} IS NULL'
 
-
     sql = f"SELECT count(*) FROM pg_stat_activity {where_cond}"
     rows = dao.sql_query(conn, sql)
     total = rows[0]['count']
@@ -1313,7 +1313,8 @@ def build_standby(req):
         export_ld_library_path_cmd = ''
         if pg_bin_path:
             export_ld_library_path_cmd = f'export LD_LIBRARY_PATH={pg_lib_path}:$LD_LIBRARY_PATH;'
-        cmd = (f'{export_ld_library_path_cmd}{pg_bin_path}/psql -h{up_db_repl_ip} -p{up_db_port} '
+        cmd = (
+            f'{export_ld_library_path_cmd}{pg_bin_path}/psql -h{up_db_repl_ip} -p{up_db_port} '
             f'-U{repl_user} "dbname=template1 password={real_pass} replication=database" -c "IDENTIFY_SYSTEM"')
         err_code, err_msg, _out_msg = rpc.run_cmd_result(cmd)
         if err_code != 0:
@@ -1499,7 +1500,6 @@ def change_up_primary_db(req):
         # else:
         #     is_primary = 0
         dao.update_up_db_id(cur_up_db_id, new_up_db, 0)
-
 
     # 更新集群机房信息
     if cluster_id:
@@ -2098,7 +2098,7 @@ def get_db_pg_hba(req):
                     if map_user in ident_content:
                         hba_row["pg_ident"] = ident_content.split()
     except Exception as e:
-            return 400, f"Get the pg_ident information with unexpected error, {str(e)}."
+        return 400, f"Get the pg_ident information with unexpected error, {str(e)}."
 
     # query database names and user names from the database
     code, db_names = pg_helpers.get_db_names(db_conn)
@@ -2143,8 +2143,8 @@ def delete_one_pg_hba(req):
     db_info = rows[0]
 
     # delete from pg_hba
-    code, result = pg_helpers.delete_one_pg_hba(db_info['host'], db_info['pgdata'],
-                                        pdict['line_number'], pdict['is_reload'])
+    code, result = pg_helpers.delete_one_pg_hba(
+        db_info['host'], db_info['pgdata'], pdict['line_number'], pdict['is_reload'])
     if code != 0:
         return 400, result
 
@@ -2199,7 +2199,7 @@ def get_pg_log_file_list(req):
     # try to connect the host
     code, result = rpc_utils.get_rpc_connect(db_info["host"])
     if code != 0:
-        return 400, f"Connect the host({db_conn_info['host']}) failed, {result}."
+        return 400, f"Connect the host({db_info['host']}) failed, {result}."
     rpc = result
 
     # get the log_info

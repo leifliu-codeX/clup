@@ -1444,7 +1444,7 @@ def get_pfs_info(host, pfs_disk_name, directory_name=None):
         # block usage
         blk_usage = blk_info.split(",")
         for infor_content in blk_usage:
-            if "nall"in infor_content:
+            if "nall" in infor_content:
                 blk_numbers = int(infor_content.split(" ")[-1])
                 pfs_disk_info['blk_numbers'] = blk_numbers
             elif "nchild" in infor_content:
@@ -1452,7 +1452,7 @@ def get_pfs_info(host, pfs_disk_name, directory_name=None):
                 pfs_disk_info['current_chunks'] = chunks
             elif "nfree" in infor_content:
                 blk_free_numbers = int(infor_content. split(" ")[-1])
-                free_size = blk_free_numbers * 4 / 1024 # GB
+                free_size = blk_free_numbers * 4 / 1024  # GB
                 pfs_disk_info['blk_free_numbers'] = blk_free_numbers
                 pfs_disk_info['free_size'] = round(free_size, 2)
         # add blk usage info
@@ -1481,7 +1481,7 @@ def get_pfs_info(host, pfs_disk_name, directory_name=None):
                 return -1, f"{step}: get the directory usage failed, {err_msg}."
             else:
                 # ..256 /nvme1n1/shared_data//pg_replslot 1006080 /nvme1n1/shared_data/
-                directory_used = int(out_msg.split(" ")[-2]) # KB
+                directory_used = int(out_msg.split(" ")[-2])  # KB
                 # directory_used = info_lines[-1].split(" ")[0]
                 pfs_disk_info['directory_used'] = {
                     directory_name: round(directory_used / 1024 / 1024, 2)  # GB

@@ -29,7 +29,6 @@ import logging
 import subprocess
 
 
-
 def run_cmd(cmd):
     logging.debug(f"Run: {cmd}")
     cp = subprocess.run(cmd, shell=True)

@@ -98,7 +98,7 @@ def create_zqpool(req):
     sql = "SELECT zqpool_id FROM csu_zqpool WHERE host = %s AND conf_data->>'mgr_port' = '%s'"
     rows = dbapi.query(sql, (pdict['host'], pdict['mgr_port']))
     if rows:
-        return 400, f"The zqpool(id={rows[0]['zqpool_id']}, host={pdict['host']}, mgr_port={pdict['mgr_port']}) is aready exist."
+        return 400, f"The zqpool(id={rows[0]['zqpool_id']}, {pdict['host']}:{pdict['mgr_port']}) is aready exist."
 
     mgr_setting_dict = deepcopy(pdict)
     del mgr_setting_dict['host']
@@ -200,8 +200,7 @@ def update_zqpool_info(req):
     dbapi.execute(sql, (json.dumps(zqpool_info['conf_data']), pdict['zqpool_id']))
 
     # update the conf file
-    code, result = zqpool_helpers.update_zqpool_conf(zqpool_info['host'],
-                                conf_file, {"mgr_settings": new_conf_dict})
+    code, result = zqpool_helpers.update_zqpool_conf(zqpool_info['host'], conf_file, {"mgr_settings": new_conf_dict})
     if code != 0:
         return 200, f"Update csu_zqpool success, but modify the configure file({conf_file}) failed, {result}."
 

@@ -39,10 +39,8 @@ COMMENT ON COLUMN csu_zqpool_pools.pool_fe IS '由连接池fe_user和fe_dbname�
 
 
 
-
-
 /*
-INSERT INTO csu_packages(package_name, path, file, version, settings, init_conf)
+INSERT INTO csu_packages(package_name, path, file, version, settings, conf_init)
 VALUES('zqpool', '/opt/csu_packages', 'zqpool', '1.0',
     '{
         "os_user": "zqpool",

@@ -64,7 +64,6 @@ def rpc_or_host(a_func):
     return wrap_func
 
 
-
 @rpc_or_host
 def is_running(rpc, pgdata):
     """
@@ -275,7 +274,6 @@ def is_ready(rpc, pgdata, port):
             return -1, f"run cmd({cmd}) with error, {err_msg}"
     except Exception:
         return -1, f"Check pg_isready with unexcept error, {traceback.format_exc()}"
-
 
 
 @rpc_or_host
@@ -610,7 +608,7 @@ def pg_rewind(rpc, pdict):
         general_task_mgr.log_info(task_id, f"{msg_prefix}: Start {step} ...")
         pgdata = pdict['pgdata']
         version = pdict['version']
-        _os_user = pdict['os_user']
+        # _os_user = pdict['os_user']
         up_db_port = pdict['up_db_port']
         up_db_repl_ip = pdict['up_db_repl_ip']
         repl_user = pdict['repl_user']
@@ -809,7 +807,7 @@ def modify_pg_conf(rpc, pgdata, setting_dict, is_pg_auto_conf=False):
         err_code, err_msg = rpc.pwd_getpwuid(fs['st_uid'])
         if err_code != 0:
             return err_code, err_msg
-        _upw_dict = err_msg
+        # _upw_dict = err_msg
         if is_pg_auto_conf:
             conf = f'{pgdata}/postgresql.auto.conf'
         else:
@@ -1124,7 +1122,6 @@ def set_pg_data_dir_mode(rpc, os_user, pgdata):
     return err_code, err_msg
 
 
-
 def check_pg_version(pg_version):
     """检查字符串是否是一个PG的版本号
     """
@@ -1202,7 +1199,7 @@ def get_pg_bin_version(rpc, pg_bin_path):
         pg_major_version = cells[-1]
         try:
             # 这里把版本号转换成浮点数,是为了测试取的版本号是否正确,可以如果不能转换,抛出异常,说明取的有问题,第一行的格式不是我们想象的这样,需要重新修改代码
-            _float_version = float(pg_major_version)
+            _ = float(pg_major_version)
             return 0, pg_major_version
         except ValueError:
             err_code = -1

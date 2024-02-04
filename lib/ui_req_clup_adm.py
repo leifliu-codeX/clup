@@ -214,7 +214,6 @@ def get_agent_log_level_list(req):
         row['log_level_dict'] = agent_log_level_dict
     pool.shutdown()
 
-
     ret_rows = []
     i = 0
     exit_loop = False
@@ -311,7 +310,6 @@ def get_clup_settings(req):
         rows = dbapi.query(sql, pdict)
     except Exception as e:
         return 400, str(e)
-
 
     ret_data = {"total": row_cnt, "page_size": pdict['page_size'], "rows": rows}
     row_data = json.dumps(ret_data)
@@ -524,8 +522,9 @@ def install_csu_package(req):
 
     # install packages
     task_name = f"install package({package_info['package_name'], package_info['version']})"
-    task_id = general_task_mgr.create_task(task_type_def.INSTALL_PACKAGE, task_name,
-                            {'package_name': package_info['package_name'], "version": package_info['version']})
+    task_id = general_task_mgr.create_task(
+        task_type_def.INSTALL_PACKAGE, task_name,
+        {'package_name': package_info['package_name'], "version": package_info['version']})
     general_task_mgr.run_task(task_id, long_term_task.task_install_csu_package, (package_info, pdict["host_list"]))
 
     ret_data = {"task_id": task_id, "task_name": task_name}

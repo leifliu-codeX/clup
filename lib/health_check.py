@@ -22,14 +22,11 @@
 @description: 健康检查模块
 """
 
-import json
+
 import logging
 import threading
 import time
 import traceback
-import urllib.error
-import urllib.request
-
 import cluster_state
 import config
 import csuapp
@@ -183,8 +180,8 @@ def probe_postgres_db(cluster_id, host, db_port, db_name, db_user, db_pass, sql,
     cluster = dao.get_cluster_name(cluster_id)
     cluster = cluster.get('cluster_name', cluster_id)
     while i < retry_cnt:
-        err_code, err_msg = probe_db.probe_postgres(host, db_port,
-                    db_name, db_user, db_pass, sql, timeout)
+        err_code, err_msg = probe_db.probe_postgres(
+            host, db_port, db_name, db_user, db_pass, sql, timeout)
         if err_code != 0:
             current_time_str = helpers.get_current_time_str()
             msg = f"{current_time_str} ProbeDB[cluster_id={cluster_id}, db={host}:{db_port}]: {i + 1} time error: {err_msg}"
@@ -328,7 +325,6 @@ class SrHaChecker(threading.Thread):
             finally:
                 dao.set_cluster_state(self.cluster_id, clu_state)
                 time.sleep(probe_interval)
-
 
             # check and try add the database to cluster
             try:

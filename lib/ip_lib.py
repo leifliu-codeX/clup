@@ -30,6 +30,7 @@ import run_lib
 
 from ipaddress import IPv4Address
 
+
 def get_nic_ip_dict():
     """ 获得网卡上的各个ip地址的情况
     :return: dict

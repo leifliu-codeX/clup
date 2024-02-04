@@ -58,7 +58,9 @@ def build_polar_standby(pdict, polar_type):
             return -1, f'{step}: The superior database instance does not exist. Please check.'
         current_cluster_state = dao.get_cluster_state(up_db_dict["cluster_id"])
         if current_cluster_state not in [cluster_state.OFFLINE, cluster_state.FAILED]:
-            return -1, f"The superior database is in the cluster(cluster_id={up_db_dict['cluster_id']}), which cluster state is not OFFLINE or FAILED, cant create standby or reader database."
+            err_msg = f"The superior database is in the cluster(cluster_id={up_db_dict['cluster_id']})," \
+                f"which cluster state is not OFFLINE or FAILED, cant create standby or reader database."
+            return -1, err_msg
 
         # if polar_type is standby,superior database must be RW node
         if polar_type == "standby":
@@ -200,7 +202,7 @@ def build_polar_standby(pdict, polar_type):
             general_task_mgr.run_task(task_id, long_term_task.task_build_polar_standby, (rpc_dict, ))
 
         return 0, task_id
-    except Exception as e:
+    except Exception:
         err_msg = f"{step} with unexpected error, {traceback.format_exc()}."
         general_task_mgr.complete_task(task_id, -1, err_msg)
         dao.update_db_state(db_dict['db_id'], database_state.FAULT)

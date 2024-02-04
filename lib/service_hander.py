@@ -22,7 +22,6 @@
 @description: RPC服务模块
 """
 
-import copy
 import logging
 import threading
 
@@ -118,7 +117,6 @@ class ServiceHandle:
         if cluster_type != 1:
             return -1, f"This cluster(id={cluster_id}) is not streaming replication cluster!"
         return ha_mgr.get_repl_delay(cluster_id)
-
 
     @staticmethod
     def online(cluster_id):
@@ -232,17 +230,14 @@ class ServiceHandle:
         elif task_state == -1:
             task.log_error(task_id, msg)
 
-
     @staticmethod
     def get_clup_config(key, val=None):
         conf = config.get(key, val)
         return 0, conf
 
-
     @staticmethod
     def clup_reload():
         return config.reload()
-
 
     @staticmethod
     def complete_task(task_id, task_state, msg, callback_args):
@@ -265,7 +260,6 @@ class ServiceHandle:
         except Exception as e:
             return -1, repr(e)
 
-
     @staticmethod
     def set_log_level(logger_name, level):
         try:
@@ -279,8 +273,9 @@ class ServiceHandle:
 def run_service():
     try:
         handle = ServiceHandle()
-        srv = csurpc.Server('ha-service', handle, csuapp.is_exit,
-                password=config.get('internal_rpc_pass'), thread_count=10, debug=1)
+        srv = csurpc.Server(
+            'ha-service', handle, csuapp.is_exit,
+            password=config.get('internal_rpc_pass'), thread_count=10, debug=1)
         server_rpc_port = config.get('server_rpc_port')
         srv.bind(f"tcp://0.0.0.0:{server_rpc_port}")
         srv.run()

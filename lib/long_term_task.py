@@ -43,7 +43,6 @@ from general_utils import upload_file
 __author__ = 'tangcheng'
 
 
-
 def create_pg_db(task_id, host, db_id, rpc_dict):
     """[summary]
 
@@ -92,7 +91,7 @@ def create_pg_db(task_id, host, db_id, rpc_dict):
                 return err_code, err_msg
 
         pg_bin_path = rpc_dict['pg_bin_path']
-        _pg_root_path = os.path.abspath(os.path.join(pg_bin_path, os.pardir))
+        # _pg_root_path = os.path.abspath(os.path.join(pg_bin_path, os.pardir))
         db_user = rpc_dict['db_user']
         db_pass = rpc_dict['db_pass']
         pgdata = rpc_dict['pgdata']
@@ -145,7 +144,6 @@ def create_pg_db(task_id, host, db_id, rpc_dict):
         if err_code != 0:
             return err_code, err_msg
         general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
-
 
         step = 'Execute the initialization command(initdb)'
         general_task_mgr.log_info(task_id, f"{msg_prefix}: step start:  {step} ...")
@@ -324,7 +322,6 @@ def build_pg_standby(task_id, host, db_id, rpc_dict):
             err_code = -1
             err_msg = f"{msg_prefix}: {step} step fail: parameter is not provided in the create database configuration(instance_type) , configuration: {mask_rpc_dict}"
             return err_code, err_msg
-
 
         required_params += alone_params
 
@@ -1597,7 +1594,6 @@ def install_csu_package(task_id, package_info, host_list):
                 continue
             general_task_mgr.log_info(task_id, f"{step}: Connect the host success.")
 
-
             rpc = result
             # if has os_user,check or create
             if os_user and not rpc.os_user_exists(os_user):
@@ -1666,4 +1662,3 @@ def task_install_csu_package(task_id, package_info, host_list):
         msg = f"Install package with unexpected error, {traceback.format_exc()}."
     finally:
         general_task_mgr.complete_task(task_id, state_code, msg)
-

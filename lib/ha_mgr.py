@@ -258,8 +258,7 @@ def failback_trigger_func(task_id, msg_prefix, cluster_dict, before_cluster_dict
     trigger_db_name = cluster_dict['trigger_db_name']
     trigger_db_func = cluster_dict['trigger_db_func']
     if trigger_db_name and trigger_db_func:
-        log_info(task_id,
-            f"{msg_prefix}: trigger db({trigger_db_name}) function({trigger_db_func}) in primary ...")
+        log_info(task_id, f"{msg_prefix}: trigger db({trigger_db_name}) function({trigger_db_func}) in primary ...")
 
         sql = "select {0}(%s, %s, %s, %s, %s);".format(trigger_db_func)
         err_code, err_msg = probe_db.exec_sql(
@@ -374,8 +373,10 @@ def failback(task_id: int, db_dict, restore_cluster_state):
         if err_code == 0:
             log_info(task_id, f"{msg_prefix}: change db({db_id}) sr to db({up_db_id}) success.")
         else:
-            log_info(task_id, f"{msg_prefix}: change db({db_id}) sr to db({up_db_id}) failed: "
-            f"It is possible that the database has already been deleted and will be rebuilt later. This error message can be ignored. The error message is: {err_code}, {err_msg}")
+            log_info(
+                task_id, f"{msg_prefix}: change db({db_id}) sr to db({up_db_id}) failed: "
+                f"It is possible that the database has already been deleted and will be rebuilt later."
+                f"This error message can be ignored. The error message is: {err_code}, {err_msg}")
 
         log_info(task_id, f"Failback: fault database: ({failback_db_dict['host']}:{failback_db_dict['port']})")
         db_user = clu_db_list[0]['db_user']
@@ -517,17 +518,11 @@ def failback(task_id: int, db_dict, restore_cluster_state):
                         return err_code, err_msg
             log_info(task_id, f'{msg_prefix}: begin build standby ...')
 
-
             # 获得unix_socket_directories，一般搭建备库时，配置.bashrc中的PGHOST
             log_info(task_id, f"{msg_prefix}: get unix_socket_directories from primary database({pri_db_dict['host']})...")
             sql = "select setting from pg_settings where name='unix_socket_directories'"
-            err_code, rows = probe_db.run_sql(pri_db_dict['host'],
-                                            db_port,
-                                            'template1',
-                                            db_user,
-                                            db_pass,
-                                            sql,
-                                            ())
+            err_code, rows = probe_db.run_sql(
+                pri_db_dict['host'], db_port, 'template1', db_user, db_pass, sql, ())
             if err_code != 0:
                 err_msg = f'{msg_prefix}: failed to get unix_socket_directories: {rows}'
                 return err_code, err_msg
@@ -644,8 +639,8 @@ def test_sr_can_switch(cluster_id, db_id: int, primary_db, keep_cascaded=False):
     repl_pass = db_encrypt.from_db_text(clu_db_list[0]['repl_pass'])
 
     # 获得要成为新主库的数据库当期的wal文件在原主库上是否存在
-    err_code, new_pri_last_wal_file = probe_db.get_last_wal_file(new_pri_db['host'], db_port,
-                                                     repl_user, repl_pass)
+    err_code, new_pri_last_wal_file = probe_db.get_last_wal_file(
+        new_pri_db['host'], db_port, repl_user, repl_pass)
     if err_code != 0:
         err_msg = f"get new primary({new_pri_db['host']}) last wal file failed: {new_pri_last_wal_file}"
         logging.info(f"{pre_msg}:{err_msg}")
@@ -667,7 +662,8 @@ def test_sr_can_switch(cluster_id, db_id: int, primary_db, keep_cascaded=False):
         return -1, exists
 
     if not exists:
-        err_msg = f"The new node({new_pri_db['host']}) that wants to become the primary does not have the necessary WAL logs({xlog_file_full_name}) from the current primary({old_pri_db['host']})."
+        err_msg = f"The new node({new_pri_db['host']}) that wants to become the primary" \
+            f"does not have the necessary WAL logs({xlog_file_full_name}) from the current primary({old_pri_db['host']})."
         err_msg += " (the WAL logs are too outdated), so the switch cannot be made."
         logging.info(f"{pre_msg}:{err_msg}")
         return 1, err_msg
@@ -827,8 +823,8 @@ def sr_switch(task_id, cluster_id, db_id, primary_db, keep_cascaded=False):
         # 因为将成为新主库的节点的WAL日志有可能是落后旧主库，如果落后太多，所需要的WAL在旧主库上已经被删除掉了，则不能切换成主库
         err_msg = ''
         try:
-            err_code, new_pri_last_wal_file = probe_db.get_last_wal_file(new_pri_db['host'], db_port,
-                                                     repl_user, repl_pass)
+            err_code, new_pri_last_wal_file = probe_db.get_last_wal_file(
+                new_pri_db['host'], db_port, repl_user, repl_pass)
 
             if err_code != 0:
                 err_msg = f"{pre_msg}: get new pirmary({new_pri_db['host']}) last wal file failed: {new_pri_last_wal_file}"
@@ -972,8 +968,9 @@ def sr_switch(task_id, cluster_id, db_id, primary_db, keep_cascaded=False):
                     if not p['instance_type']:
                         p['instance_type'] = 'physical'
 
-                    err_code, err_msg = pg_db_lib.pg_change_standby_updb(p['host'], p['pgdata'], repl_user, repl_pass,
-                                                p['repl_app_name'], new_pri_db['host'], new_pri_db['port'])
+                    err_code, err_msg = pg_db_lib.pg_change_standby_updb(
+                        p['host'], p['pgdata'], repl_user, repl_pass,
+                        p['repl_app_name'], new_pri_db['host'], new_pri_db['port'])
                     if err_code != 0:
                         log_info(task_id, f'{pre_msg}: change host-{p["host"]} updb faild: {err_msg}')
 
@@ -1014,7 +1011,7 @@ def sr_switch(task_id, cluster_id, db_id, primary_db, keep_cascaded=False):
         log_info(task_id, ret_msg)
         general_task_mgr.complete_task(task_id, 1, 'Success')
         return 0, "Switch success"
-    except Exception as e:
+    except Exception:
         error_msg = f"{pre_msg}: with unexpected error,{traceback.format_exc()}, switch failed!!!"
         log_info(task_id, error_msg)
         general_task_mgr.complete_task(task_id, -1, error_msg)
@@ -1181,8 +1178,9 @@ def polar_switch(task_id, cluster_id, new_pri_db_id, old_pri_db_id):
             dbapi.execute("UPDATE clup_used_vip SET db_id=%s,used_reason=1 WHERE vip = %s", (new_pri_db_id, vip))
             log_info(task_id, f"{pre_msg}: add primary vip({vip}) to new primary({new_pri_db_dict['host']}) completed.")
         except Exception:
-            log_error(task_id, f"{pre_msg}: add vip ({vip}) with unexpected error "
-                     f"to new primary({new_pri_db_dict['host']}): {traceback.format_exc()}")
+            log_error(
+                task_id, f"{pre_msg}: add vip ({vip}) with unexpected error "
+                f"to new primary({new_pri_db_dict['host']}): {traceback.format_exc()}")
 
         old_pri_db_dict['is_primary'] = 0
         new_pri_db_dict['is_primary'] = 1
@@ -1416,12 +1414,14 @@ def online_sr_cluster(cluster_dict):
                 island = False
                 break
     except Exception as e:
-        err_result.append([f"The configuration item 'probe_island_ip={str_ip_list}' in clup.conf is incorrect, which is causing the ping to fail: {repr(e)}",
-        "The configuration item 'probe_island_ip' cannot be a broadcast address or an address of a certain network. It needs to be a valid IP address of a normal host!"])
+        err_result.append([
+            f"The configuration item 'probe_island_ip={str_ip_list}' in clup.conf is incorrect, which is causing the ping to fail: {repr(e)}",
+            "The configuration item 'probe_island_ip' cannot be a broadcast address or an address of a certain network. It needs to be a valid IP address of a normal host!"])
         return err_result
     if island:
-        err_result.append([f"The machine has become an isolated network island as it cannot ping any other hosts in the network, including the IP address {str_ip_list}",
-         f"It could also be that the configuration item 'probe_island_ip={str_ip_list}' in clup.conf is incorrect"])
+        err_result.append([
+            f"The machine has become an isolated network island as it cannot ping any other hosts in the network, including the IP address {str_ip_list}",
+            f"It could also be that the configuration item 'probe_island_ip={str_ip_list}' in clup.conf is incorrect"])
         return err_result
 
     for db in clu_db_list:
@@ -1447,8 +1447,9 @@ def online_sr_cluster(cluster_dict):
             ret = rpc.os_path_exists(pgdata)
             if not ret:
                 logging.info(f"{pre_msg}: The data directory({pgdata}) of the database was not found on the host (IP: {ip}).")
-                err_result.append([f"The database directory({pgdata}) does not exist on the host({ip}).",
-                 "Please check the configuration or confirm whether the database instance is created on the host."])
+                err_result.append([
+                    f"The database directory({pgdata}) does not exist on the host({ip}).",
+                    "Please check the configuration or confirm whether the database instance is created on the host."])
             else:
                 logging.info(f"{pre_msg}: The data directory({pgdata}) of the database exists on the host({ip}).")
         finally:
@@ -1482,7 +1483,6 @@ def online_sr_cluster(cluster_dict):
     db_user = clu_db_list[0]['db_user']
     db_pass = db_encrypt.from_db_text(clu_db_list[0]['db_pass'])
     repl_user = clu_db_list[0]['repl_user']
-
 
     sql = " SELECT db_id, host, port " \
         "FROM clup_db ,(SELECT up_db_id FROM clup_db WHERE cluster_id=%s) AS t " \
@@ -1524,20 +1524,30 @@ def online_sr_cluster(cluster_dict):
                 break
         if is_find:
             if state != 'streaming':
-                logging.info(f"{pre_msg}: The standby database({db['host']}) is connected to the primary database({tmp_pri_ip}), but the replication state is not streaming, but rather in a certain state({state}).")
-                err_result.append([f"The standby database({db['host']}) is connected to the primary database({tmp_pri_ip}), but the replication state is not streaming, but rather in a certain state({state})",
-                                   "Please check the configuration of streaming replication."])
+                logging.info(
+                    f"{pre_msg}: The standby database({db['host']}) is connected to the primary database({tmp_pri_ip}), "
+                    f"but the replication state is not streaming, but rather in a certain state({state}).")
+                err_result.append([
+                    f"The standby database({db['host']}) is connected to the primary database({tmp_pri_ip}), "
+                    f"but the replication state is not streaming, but rather in a certain state({state})",
+                    "Please check the configuration of streaming replication."])
             if real_repl_user != repl_user:
-                logging.info(f"{pre_msg}: The standby database({db['host']}) is connected to the primary database({tmp_pri_ip}), but the user({real_repl_user}) being used is not the configured username({repl_user}).")
-                err_result.append([f"The standby database({db['host']}) is connected to the primary database({tmp_pri_ip}), but the user({real_repl_user}) being used is not the configured username({repl_user}).",
-                                   "Please check the configured username for streaming replication."])
+                logging.info(
+                    f"{pre_msg}: The standby database({db['host']}) is connected to the primary database({tmp_pri_ip}),"
+                    f"but the user({real_repl_user}) being used is not the configured username({repl_user}).")
+                err_result.append([
+                    f"The standby database({db['host']}) is connected to the primary database({tmp_pri_ip}), "
+                    f"but the user({real_repl_user}) being used is not the configured username({repl_user}).",
+                    "Please check the configured username for streaming replication."])
         else:
             logging.info(f"{pre_msg}: The standby database({db['host']}, application_name={repl_app_name}) is not connected to the primary database({tmp_pri_ip}).")
-            err_result.append([f"The standby database({db['host']},application_name={repl_app_name}) didn't connect to the primary database({tmp_pri_ip}), and the reason for the failure is:",
-                               f"1. The application_name in the primary_conninfo of the standby database's replication configuration is not configured as {db['host']}.",
-                               "2. The standby database is too far behind the primary database, causing the required WAL log files to be already removed on the primary.;",
-                               "3. Replication configuration error caused the standby database to fail to connect to the primary database.",
-                               "Please check the configuration of streaming replication."])
+            err_result.append([
+                f"The standby database({db['host']},application_name={repl_app_name}) "
+                f"didn't connect to the primary database({tmp_pri_ip}), and the reason for the failure is:",
+                f"1. The application_name in the primary_conninfo of the standby database's replication configuration is not configured as {db['host']}.",
+                "2. The standby database is too far behind the primary database, causing the required WAL log files to be already removed on the primary.;",
+                "3. Replication configuration error caused the standby database to fail to connect to the primary database.",
+                "Please check the configuration of streaming replication."])
 
     db_port = cluster_dict['port']
     probe_db_name = cluster_dict['probe_db_name']
@@ -1572,23 +1582,29 @@ def online_sr_cluster(cluster_dict):
     err_code, rows = pg_utils.sql_query_dict(pri_ip, db_port, probe_db_name, db_user, db_pass, sql,
                                              (probe_table,))
     if err_code != 0:
-        logging.info(f"{pre_msg}: An error occurred when checking if a table({probe_table}) is created in database({probe_db_name}) on the database instance on the host({pri_ip}): {rows}")
-        err_result.append([f"An error occurred when checking if a table({probe_table}) is created in database({probe_db_name}) on the database instance on the host({pri_ip}): {rows}",
-                           "Please check the error logs to determine the cause."])
+        logging.info(
+            f"{pre_msg}: An error occurred when checking if a table({probe_table}) is created in database({probe_db_name}) on the database instance on the host({pri_ip}): {rows}")
+        err_result.append([
+            f"An error occurred when checking if a table({probe_table}) is created in database({probe_db_name}) on the database instance on the host({pri_ip}): {rows}",
+            "Please check the error logs to determine the cause."])
         logging.info(f"{pre_msg}: Online failed!")
         return err_result
     if rows[0]['cnt'] == 0:
-        logging.info(f"{pre_msg}: In the database instance on the host({pri_ip}), the table({probe_table}) does not exist in the database({probe_db_name}), so it will be created ...")
+        logging.info(
+            f"{pre_msg}: In the database instance on the host({pri_ip}), "
+            f"the table({probe_table}) does not exist in the database({probe_db_name}), so it will be created ...")
         sql = 'CREATE TABLE cs_sys_heartbeat(hb_time TIMESTAMPTZ);INSERT INTO cs_sys_heartbeat VALUES(now())'
         err_code, err_msg = pg_utils.sql_exec(pri_ip, db_port, probe_db_name, db_user, db_pass, sql)
         if err_code != 0:
             logging.info(f"{pre_msg}: Failed to create a table({probe_table}) in the database({probe_db_name}) on the database instance on the host({pri_ip}): {err_msg}")
-            err_result.append([f"Failed to create a table({probe_table}) in the database({probe_db_name}) on the database instance on the host({pri_ip}): {err_msg}",
+            err_result.append([
+                f"Failed to create a table({probe_table}) in the database({probe_db_name}) on the database instance on the host({pri_ip}): {err_msg}",
                 "Please check the error logs to determine the cause."])
             logging.info(f"{pre_msg}: Online failed!")
             return err_result
     else:
-        logging.info(f"{pre_msg}: The table({probe_table}) already exists in the database({probe_db_name}) in the database instance on the host({pri_ip}), so there is no need to create it.")
+        logging.info(
+            f"{pre_msg}: The table({probe_table}) already exists in the database({probe_db_name}) instance on the host({pri_ip}), so there is no need to create it.")
 
     trigger_db_name = cluster_dict['trigger_db_name']
     trigger_db_func = cluster_dict['trigger_db_func']
@@ -1606,8 +1622,9 @@ def online_sr_cluster(cluster_dict):
         )
         if err_code != 0:
             logging.info(f"{pre_msg}: run {sql} failed: {data}")
-            err_result.append([f"Execution of database trigger action failed.: run {sql} failed: {data}",
-            f"Please check if the functions({trigger_db_func}) in the database({trigger_db_name}) exist and can be executed correctly."])
+            err_result.append([
+                f"Execution of database trigger action failed.: run {sql} failed: {data}",
+                f"Please check if the functions({trigger_db_func}) in the database({trigger_db_name}) exist and can be executed correctly."])
             logging.info(f"{pre_msg}: Check failed, Online failed!")
             return err_result
 

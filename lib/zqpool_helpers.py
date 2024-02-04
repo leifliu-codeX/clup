@@ -29,21 +29,20 @@ import json
 import requests
 import traceback
 import rpc_utils
-import pg_db_lib
 import db_encrypt
 
 from copy import deepcopy
 from collections import OrderedDict
 
-DB_READONLY  = 1 # 只读节点
-DB_READWRITE = 2 # 读写节点
+DB_READONLY = 1      # 只读节点
+DB_READWRITE = 2     # 读写节点
 
-BE_ONLINE      = 1  # 上线使用中
-BE_OFFLINE     = 0  # 空闲未被上线使用
-BE_REMOVING    = -9 # 表示此portal正在被移除
-BE_BAD_NO_FREE = -1 # 表示此portal已经坏了，但可能还有未被释放
-BE_BAD_FREEED  = -2 # 表示此portal已经坏了，但所有连接都被释放了
-BE_BAD_UNKNOW  = -3 # 表示此portal已经坏了，但所有连接都被释放了
+BE_ONLINE = 1        # 上线使用中
+BE_OFFLINE = 0       # 空闲未被上线使用
+BE_REMOVING = -9     # 表示此portal正在被移除
+BE_BAD_NO_FREE = -1  # 表示此portal已经坏了，但可能还有未被释放
+BE_BAD_FREEED = -2   # 表示此portal已经坏了，但所有连接都被释放了
+BE_BAD_UNKNOW = -3   # 表示此portal已经坏了，但所有连接都被释放了
 
 
 BE_STATE_DICT = {
@@ -346,7 +345,7 @@ def get_pool_info(pool_id):
     # get the zqpool info
     zqpool_info = get_zqpool_mgr_info(pool_id)
     if not zqpool_info:
-        return -1, f"Cant find the pool manager information."
+        return -1, "Cant find the pool manager information."
 
     pool_info = {
         "pool_id": pool_id,
@@ -408,7 +407,7 @@ def get_pool_list(filter=None):
         """
         rows = dbapi.query(sql, (filter, ))
     else:
-        sql = f"""SELECT zq.zqpool_id, pool_id, host, pool_fe
+        sql = """SELECT zq.zqpool_id, pool_id, host, pool_fe
             FROM csu_zqpool_pools pool, csu_zqpool zq
             WHERE zq.zqpool_id = pool.zqpool_id
         """
@@ -640,8 +639,10 @@ def create_zqpool(pdict, mgr_setting_dict):
             state, host, os_user, root_path, conf_data)
             VALUES(%s, %s, 0, %s, %s, %s, %s::jsonb) RETURNING zqpool_id
         """
-        rows = dbapi.query(sql, (pdict['zqpool_name'], pdict['package_id'],
-                        host, pdict['os_user'], pdict['root_path'], json.dumps(mgr_setting_dict)))
+        rows = dbapi.query(sql, (
+            pdict['zqpool_name'], pdict['package_id'], host,
+            pdict['os_user'], pdict['root_path'], json.dumps(mgr_setting_dict))
+        )
         if not rows:
             return -1, f"Excute sql({sql}) failed."
 
@@ -680,8 +681,10 @@ def add_zqpool(pdict):
         package_id, state, host, os_user, root_path, conf_data)
         VALUES(%s, %s, 0, %s, %s, %s, %s::jsonb) RETURNING zqpool_id
     """
-    rows = dbapi.query(sql, (pdict['zqpool_name'], pdict['package_id'],
-                pdict['host'], pdict['os_user'], pdict['root_path'], settings_json))
+    rows = dbapi.query(sql, (
+        pdict['zqpool_name'], pdict['package_id'],
+        pdict['host'], pdict['os_user'], pdict['root_path'], settings_json)
+    )
     if not rows:
         return -1, f"Excuter sql({sql}) failed."
     zqpool_id = rows[0]["zqpool_id"]
@@ -754,8 +757,10 @@ def add_pool(pool_info, zqpool_info):
     insert_sql = """INSERT INTO csu_zqpool_pools(zqpool_id,
         pool_fe, state, conf_data) VALUES(%s, %s, 0, %s::jsonb) RETURNING pool_id
     """
-    rows = dbapi.query(insert_sql, (zqpool_info['zqpool_id'],
-                pool_info['pool_fe'], json.dumps(pool_info['conf_data'])))
+    rows = dbapi.query(insert_sql, (
+        zqpool_info['zqpool_id'],
+        pool_info['pool_fe'], json.dumps(pool_info['conf_data']))
+    )
     if not rows:
         return -1, f"Excute sql({insert_sql}) failed."
     pool_id = rows[0]['pool_id']
@@ -787,72 +792,6 @@ def add_pool(pool_info, zqpool_info):
         return -1, f"Add pool(id={pool_id}) success, but send request failed, maybe zqpool is not start."
 
     return 0, f"Success add the pool(pool_id={pool_id})."
-
-
-def update_pool_info(zqpool_id, pool_id):
-    # get the zqpool_info
-    sql = """SELECT zqpool_id, host, root_path, conf_data
-        FROM csu_zqpool zq, csu_zqpool_pools pool
-        WHERE zq.zqpool_id = pool.zqpool_id AND zq.zqpool_id = %s AND pool_id = %s
-    """
-    rows = dbapi.query(sql, (zqpool_id, pool_id))
-    if not rows:
-        return -1, f"The zqpool(id={zqpool_id}) is not exist."
-
-    sql = """SELECT zq.zqpool_id, host, root_path,
-        zq.conf_data as , pool_fe, pool.conf_data
-        FROM csu_zqpool zq, csu_zqpool_pools pool
-        WHERE zq.zqpool_id = pool.zqpool_id AND zq.zqpool_id = %s AND pool_id = %s
-    """
-    rows = dbapi.query(sql, (zqpool_id, pool_id))
-    if not rows:
-        return -1, f"The pool(pool_id={pool_id}, zqpool_id={zqpool_id}) is not exists."
-    pool_info = rows[0]
-
-    host = pool_info['host']
-    zqpool_info = {
-        "host": host,
-        "zqpool_id": pool_info['zqpool_id'],
-        "mgr_port": pool_info['settings']['mgr_port'],
-        "mgr_token": pool_info['settings']['mgr_token']
-
-    }
-    code, result = get_pool_list([zqpool_info], filter_pool_fe=pool_info['pool_fe'])
-    if code != 0:
-        return -1, f"Get the pool list for zqpool(zqpool_id={pool_info['zqpool_id']}) failed, {result}."
-    current_conf = conf_convert(result[0])
-
-    # connect the host
-    code, result = rpc_utils.get_rpc_connect(host)
-    if code != 0:
-        return -1, f"Connect the host({host}) failed, {result}."
-    rpc = result
-
-    # read the conf file to dict
-    conf_file = os.path.join(pool_info['settings']['root_path'], 'zqpool.conf')
-    code, result = read_zqpool_conf(rpc, conf_file)
-    if code != 0:
-        return -1, f"Read the configure file({conf_file}) failed, {result}."
-    conf_dict = result
-
-    # check common settings
-    for setting in conf_dict['mgr_settings'].keys():
-        if setting in current_conf:
-            conf_dict['mgr_settings'][setting] = current_conf[setting]
-
-    # check pool settings
-    for id, setting_dict in conf_dict['pools_settings']:
-        if id != current_conf['id']:
-            continue
-        for setting in setting_dict.keys():
-            if setting in current_conf:
-                conf_dict['pools_settings'][id][setting] = current_conf[setting]
-
-    # update conf file
-
-
-    # update the csu_zqpool and csu_zqpool_pools
-    pass
 
 
 def check_zqpool_state(zqpool_id):
@@ -909,7 +848,7 @@ def start_zqpool(zqpool_info):
         # sleep 3s
         time.sleep(3)
     except Exception:
-        result -1, f"Run cmd with unexpected error, {traceback.format_exc()}."
+        return -1, f"Run cmd with unexpected error, {traceback.format_exc()}."
     finally:
         rpc.close()
 
@@ -1022,7 +961,7 @@ def delete_pool(pool_id):
     # get zqpool info
     zqpool_info = get_zqpool_mgr_info(pool_id)
     if not zqpool_info:
-        return -1, f"Cant find the pool manager information."
+        return -1, "Cant find the pool manager information."
 
     # if is online, need remove from the zqpool
     if pool_state == 1:

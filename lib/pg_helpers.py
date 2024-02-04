@@ -141,8 +141,9 @@ def create_db(pdict):
                 if not rpc.os_path_exists(plug_ctl_file):
                     return -1, f"Plug-in({plug}) not installed!"
 
-        pdict['db_detail'] = json.dumps(dict(os_user=pdict['os_user'], os_uid=pdict['os_uid'], db_user=pdict['db_user'], db_pass=pdict['db_pass'],
-                        instance_type=pdict['instance_type'], version=pdict['version'], pg_bin_path=pdict['pg_bin_path'], room_id='0'))
+        pdict['db_detail'] = json.dumps(dict(
+            os_user=pdict['os_user'], os_uid=pdict['os_uid'], db_user=pdict['db_user'], db_pass=pdict['db_pass'],
+            instance_type=pdict['instance_type'], version=pdict['version'], pg_bin_path=pdict['pg_bin_path'], room_id='0'))
         pdict['is_primary'] = 1
         pdict['instance_name'] = instance_name
         pdict['db_state'] = db_state
@@ -373,7 +374,7 @@ def build_standby(pdict):
             general_task_mgr.complete_task(task_id, -1, err_msg)
             dao.update_db_state(db_dict['db_id'], database_state.CREATE_FAILD)
         return err_code, (task_id, db_id)
-    except Exception as e:
+    except Exception:
         err_code = -1,
         err_msg = traceback.format_exc()
         dao.update_db_state(db_dict['db_id'], database_state.CREATE_FAILD)
@@ -508,8 +509,8 @@ def sr_test_can_switch(old_pri_db, new_pri_db):
 
     try:
         repl_pass = db_encrypt.from_db_text(new_pri_db['repl_pass'])
-        err_code, new_pri_last_wal_file = probe_db.get_last_wal_file(new_pri_db['repl_ip'], new_pri_db['port'],
-                                                    new_pri_db['repl_user'], repl_pass)
+        err_code, new_pri_last_wal_file = probe_db.get_last_wal_file(
+            new_pri_db['repl_ip'], new_pri_db['port'], new_pri_db['repl_user'], repl_pass)
 
         if err_code != 0:
             err_msg = f"get new pirmary({new_pri_db['host']}) last wal file failed: {new_pri_last_wal_file}"
@@ -646,7 +647,8 @@ def renew_pg_bin_info(db_id):
     更新PG数据库中与PG软件和操作系统相关的信息,如版本、os_user、os_uid、pg_bin_path等信息
     """
 
-    sql = ("SELECT db_id, up_db_id, cluster_id, scores, state, pgdata, is_primary, repl_app_name, host, repl_ip, port, "
+    sql = (
+        "SELECT db_id, up_db_id, cluster_id, scores, state, pgdata, is_primary, repl_app_name, host, repl_ip, port, "
         " db_detail->>'instance_type' AS instance_type, db_detail->>'db_user' as db_user,"
         " db_detail->>'os_user' as os_user, db_detail->>'os_uid' as os_uid, "
         " db_detail->>'pg_bin_path' as pg_bin_path, db_detail->>'version' as version, "
@@ -928,7 +930,6 @@ def get_pg_setting_name_type_dict():
     for row in rows:
         name_type_dict[row['setting_name']] = row['setting_type']
     return name_type_dict
-
 
     # 通过sql查询当前正在使用的配置
     # db_dict = dao.get_db_conn_info(db_id)
@@ -1468,7 +1469,8 @@ def update_cluster_room_info(cluster_id, db_id=None):
     primary_room_id = primary_room_id if primary_room_id else '0'
 
     if not room_info:
-        room_info = {'0': {
+        room_info = {
+            '0': {
                 'vip': cluster_data['vip'],
                 'room_name': '默认机房'
             }

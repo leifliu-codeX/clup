@@ -31,6 +31,7 @@ from http.cookies import SimpleCookie
 
 logger = logging.getLogger('csuhttpd')
 
+
 def get_session(req):
     if 'user_name' not in req.form:
         return 400, "lost parameter: user_name"

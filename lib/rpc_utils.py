@@ -35,8 +35,7 @@ def get_server_connect(host='127.0.0.1', conn_timeout=5):
         port = config.get('server_rpc_port')
         rpc_address = f"tcp://{host}:{port}"
         c1 = csurpc.Client()
-        c1.connect(rpc_address, password=rpc_pass,
-        conn_timeout=conn_timeout)
+        c1.connect(rpc_address, password=rpc_pass, conn_timeout=conn_timeout)
         return 0, c1
     except Exception as e:
         return -1, f"Can not connect {host}: {str(e)}"

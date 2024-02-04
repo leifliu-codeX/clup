@@ -277,7 +277,9 @@ def check_polar_shared_dirs(req):
         # 检查数据目录是否存在，目的是要不存在，即返回码为255
         err_code, err_msg, _out_msg = rpc.run_cmd_result(check_datadir_cmd)
         if err_code == 0:
-            return 200, json.dumps({"err_code": -1, "err_msg": f"The data directory already exists, please check and manually delete it. Here's a reference command:'pfs -C disk rm -r /{pfs_disk_name}/{polar_datadir}'"})
+            err_msg = f"The data directory already exists, please check and manually delete it." \
+                f"Here's a reference command:'pfs -C disk rm -r /{pfs_disk_name}/{polar_datadir}'"
+            return 200, json.dumps({"err_code": -1, "err_msg": err_msg})
         elif err_code != 255:
             return 200, json.dumps({"err_code": -1, "err_msg": f"Check for data directory failed, err_msg={err_msg};"})
         return 200, json.dumps({"err_code": 0, "is_used": 0})

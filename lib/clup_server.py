@@ -115,8 +115,9 @@ def check_and_start_csumdb():
     db_user = config.get("db_user")
     db_pass = config.get("db_pass")
     try:
-        _conn = psycopg2.connect(database=db_name, user=db_user, password=db_pass,
-        host=db_host, port=db_port, connect_timeout=10)
+        _ = psycopg2.connect(
+            database=db_name, user=db_user, password=db_pass,
+            host=db_host, port=db_port, connect_timeout=10)
     except Exception:
         need_start = True
     if not need_start:
@@ -162,7 +163,6 @@ def start(foreground):
         logging.error(f"Upgrade failed: {repr(e)}")
         sys.exit(1)
 
-
     # 装载在配置表clup_settings中的配置
     config.load_setting()
 
@@ -180,7 +180,6 @@ def start(foreground):
                          ui_api_dict,
                          sessions,
                          csuapp.is_exit)
-
 
     while not csuapp.is_exit():
         time.sleep(1)
@@ -228,10 +227,12 @@ def main():
     # parser = OptionParser(usage=usage)
     parser = argparse.ArgumentParser(usage=usage)
 
-    parser.add_argument("-l", "--loglevel", action="store", dest="loglevel", default="info",
-                      help="Specifies log level:  debug, info, warn, error, critical, default is info")
-    parser.add_argument("-f", "--foreground", action="store_true", dest="foreground",
-                      help="Run in foreground, not daemon, only for start command.")
+    parser.add_argument(
+        "-l", "--loglevel", action="store", dest="loglevel", default="info",
+        help="Specifies log level:  debug, info, warn, error, critical, default is info")
+    parser.add_argument(
+        "-f", "--foreground", action="store_true", dest="foreground",
+        help="Run in foreground, not daemon, only for start command.")
 
     if len(sys.argv) == 1 or sys.argv[1] == '-h' or sys.argv[1] == '--help':
         print(version.copyright_message())

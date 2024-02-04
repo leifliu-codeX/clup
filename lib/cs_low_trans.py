@@ -38,7 +38,7 @@ magic_len = len(magic)
 CMD_AUTH = 0
 
 
-def send_data(sock: socket, data: bytes, timeout:int) -> Tuple[int, str]:
+def send_data(sock: socket, data: bytes, timeout: int) -> Tuple[int, str]:
     """
     发送数据，会把所有的数据发送完
     :param sock    : socket对象
@@ -127,7 +127,7 @@ def send_cmd(sock: socket, cmd: int, data: bytes, timeout: int) -> Tuple[int, st
     if err:
         return err, msg, 0, b''
 
-    err, msg, raw = recv_data(sock, magic_len+8, timeout)
+    err, msg, raw = recv_data(sock, magic_len + 8, timeout)
     if err:
         return err, f'after send_cmd, recv reply header failed: {msg}', 0, b''
     fmt = "!%dsiI" % magic_len
@@ -154,7 +154,7 @@ def recv_cmd(sock: socket, timeout: int) -> Tuple[int, str, int, bytes]:
     global magic
     global magic_len
 
-    err, msg, raw = recv_data(sock, magic_len+8, timeout)
+    err, msg, raw = recv_data(sock, magic_len + 8, timeout)
     if err:
         return err, msg, -1, b''
 
@@ -213,7 +213,7 @@ def connect(ip: str, port: int, password: str, conn_timeout: int, data_timeout: 
         sock = socket.create_connection((ip, port), conn_timeout)
     except Exception as e:
         return -1, str(e), None
-    err, msg, raw = recv_data(sock, magic_len+64, data_timeout)
+    err, msg, raw = recv_data(sock, magic_len + 64, data_timeout)
     if err:
         sock.close()
         return -1, msg, None
@@ -224,7 +224,7 @@ def connect(ip: str, port: int, password: str, conn_timeout: int, data_timeout: 
 
     # 把收到的字符串(服务端随机生成的)与本地的密码混合，然后做hash运算，把运算后的字符串(hash_str)发给服务端
     random_str = raw[magic_len:]
-    mixed_str = password.encode('utf-8')+random_str
+    mixed_str = password.encode('utf-8') + random_str
     hash_str = hashlib.sha256(mixed_str).hexdigest()
 
     raw = magic + hash_str.encode('utf-8')
@@ -251,9 +251,9 @@ def auth_connect(sock: socket, ha_pwd: str, timeout: int) -> Tuple[int, str]:
     :return: (err, msg)，如果err<0，说明发生错误，如果err==1，则表示验证失败，如果err==0，
     """
 
-    random_str = ''.join(random.sample('abcdABCDefghEFGHijklIJKLmnMN'+str(time.time())+'opOPqrstQRSTuvwUVWxyXYzZ', 64))
-    random_bytes= random_str.encode('utf-8')
-    raw = magic+random_bytes
+    random_str = ''.join(random.sample('abcdABCDefghEFGHijklIJKLmnMN' + str(time.time()) + 'opOPqrstQRSTuvwUVWxyXYzZ', 64))
+    random_bytes = random_str.encode('utf-8')
+    raw = magic + random_bytes
     err, msg = send_data(sock, raw, timeout)
     if err:
         return err, msg
@@ -268,7 +268,7 @@ def auth_connect(sock: socket, ha_pwd: str, timeout: int) -> Tuple[int, str]:
         return -2, 'Invalid packet format!'
 
     client_hash_str = raw[magic_len:]
-    mixed_str = ha_pwd.encode("utf-8")+random_bytes
+    mixed_str = ha_pwd.encode("utf-8") + random_bytes
     server_hash_str = hashlib.sha256(mixed_str).hexdigest().encode("utf-8")
     if client_hash_str != server_hash_str:
         err, msg = reply_cmd(sock, -1, b'Authentication failed', timeout)

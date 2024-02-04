@@ -210,15 +210,13 @@ def failover_standby_db(task_id, cluster_id, db_id):
             bad_db_dict['state'] = node_state.FAULT
             task_log_info(task_id, f"{pre_msg}: save node state to meta server completed.")
         except Exception as e:
-            task_log_error(task_id,
-                f"{pre_msg}: Unexpected error occurred during save node state to meta server: {repr(e)}")
+            task_log_error(task_id, f"{pre_msg}: Unexpected error occurred during save node state to meta server: {repr(e)}")
 
         # 如果配置了切换时调用的数据库函数，则调用此函数
         trigger_db_name = cluster_dict['trigger_db_name']
         trigger_db_func = cluster_dict['trigger_db_func']
         if trigger_db_name and trigger_db_func and pri_db_dict:
-            task_log_info(task_id,
-                f"{pre_msg}: trigger db({trigger_db_name}) function({trigger_db_func}) in primary ...")
+            task_log_info(task_id, f"{pre_msg}: trigger db({trigger_db_name}) function({trigger_db_func}) in primary ...")
 
             db_user = clu_db_list[0]['db_user']
             db_pass = db_encrypt.from_db_text(clu_db_list[0]['db_pass'])
@@ -287,8 +285,8 @@ def failover_primary_db(task_id, cluster_id, db_id):
             except OSError:
                 task_log_info(task_id, f"{pre_msg}: host({db_dict['host']}) maybe is down, can not delete write vip({vip})")
             except Exception:
-                task_log_error(task_id, f"{pre_msg}: Unexpected error occurred "
-                                   f"during delete write vip ({vip}) from host({db_dict['host']}): {traceback.format_exc()}")
+                task_log_error(
+                    task_id, f"{pre_msg}: Unexpected error occurred during delete write vip ({vip}) from host({db_dict['host']}): {traceback.format_exc()}")
             break
 
     if not bad_db_dict:
@@ -431,12 +429,13 @@ def failover_primary_db(task_id, cluster_id, db_id):
                 if not p['instance_type']:
                     p['instance_type'] = 'physical'
                 if p['db_id'] != db_id and (not p['is_primary']) and p['state'] == node_state.NORMAL:
-                    pg_db_lib.pg_change_standby_updb(p['host'], p['pgdata'], repl_user, repl_pass,
-                                                    p['repl_app_name'], new_pri_pg['host'], db_port)
+                    pg_db_lib.pg_change_standby_updb(
+                        p['host'], p['pgdata'], repl_user, repl_pass,
+                        p['repl_app_name'], new_pri_pg['host'], db_port)
                     dao.update_up_db_id(new_pri_pg['db_id'], p['db_id'], p['is_primary'])
-            task_log_info(task_id,
-                    f"{pre_msg}: "
-                    f"change all standby database upper level primary database to host({new_pri_pg['host']}) completed.")
+            task_log_info(
+                task_id, f"{pre_msg}: "
+                f"change all standby database upper level primary database to host({new_pri_pg['host']}) completed.")
         else:  # 如果保留级联关系，则把旧主库指向新主库
             pg_helpers.change_up_db_by_db_id(db_id, new_pri_pg['db_id'])
             # 将坏掉的主库的下级备库都接到新的主库上面
@@ -498,8 +497,7 @@ def failover_primary_db(task_id, cluster_id, db_id):
     trigger_db_name = cluster_dict['trigger_db_name']
     trigger_db_func = cluster_dict['trigger_db_func']
     if trigger_db_name and trigger_db_func:
-        task_log_info(task_id,
-                 f"{pre_msg}: trigger db({trigger_db_name}) function({trigger_db_func}) in primary ...")
+        task_log_info(task_id, f"{pre_msg}: trigger db({trigger_db_name}) function({trigger_db_func}) in primary ...")
 
         db_user = clu_db_list[0]['db_user']
         db_pass = db_encrypt.from_db_text(clu_db_list[0]['db_pass'])
@@ -550,8 +548,9 @@ def failover_polar_primary_db(task_id, cluster_id, db_id):
             except OSError:
                 task_log_info(task_id, f"{pre_msg}: host({db_dict['host']}) maybe is down, can not delete write vip({vip})")
             except Exception:
-                task_log_error(task_id, f"{pre_msg}: Unexpected error occurred "
-                                   f"during delete write vip ({vip}) from host({db_dict['host']}): {traceback.format_exc()}")
+                task_log_error(
+                    task_id, f"{pre_msg}: Unexpected error occurred "
+                    f"during delete write vip ({vip}) from host({db_dict['host']}): {traceback.format_exc()}")
             break
 
     if not bad_db_dict:
@@ -610,7 +609,9 @@ def failover_polar_primary_db(task_id, cluster_id, db_id):
                 task_log_info(task_id, f"{pre_msg}: run reset cmd on old primary host({bad_db_host}): {reset_cmd}")
             else:
                 is_failed = True
-                msg = f"{pre_msg}: Unable to configure the reset_cmd command, unable to stop the host({bad_db_host}) of the original primary database, and the execution of {pre_msg} fails."
+                msg = f"{pre_msg}: Unable to configure the reset_cmd command, " \
+                    f"unable to stop the host({bad_db_host}) of the original primary database," \
+                    f"and the execution of {pre_msg} fails."
                 task_log_info(task_id, msg)
                 return -1, msg
 
@@ -676,8 +677,9 @@ def failover_polar_primary_db(task_id, cluster_id, db_id):
             for p in clu_db_list:
                 if p['db_id'] != db_id and (not p['is_primary']) and p['state'] == node_state.NORMAL:
                     need_restart_db.append(p)
-            task_log_info(task_id, f"{pre_msg}: "
-                    f"change all standby database upper level primary database to host({new_pri_pg['host']}) completed.")
+            task_log_info(
+                task_id,
+                f"{pre_msg}:  change all standby database upper level primary database to host({new_pri_pg['host']}) completed.")
         # 如果保留级联关系，则把旧主库指向新主库,当前没有这项设置
         else:
             # 获取坏掉主库的一级备库
@@ -782,8 +784,7 @@ def failover_polar_primary_db(task_id, cluster_id, db_id):
         trigger_db_name = cluster_dict['trigger_db_name']
         trigger_db_func = cluster_dict['trigger_db_func']
         if trigger_db_name and trigger_db_func:
-            task_log_info(task_id,
-                f"{pre_msg}: trigger db({trigger_db_name}) function({trigger_db_func}) in primary ...")
+            task_log_info(task_id, f"{pre_msg}: trigger db({trigger_db_name}) function({trigger_db_func}) in primary ...")
 
             db_user = clu_db_list[0]['db_user']
             db_pass = db_encrypt.from_db_text(clu_db_list[0]['db_pass'])

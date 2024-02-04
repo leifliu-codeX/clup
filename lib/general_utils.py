@@ -24,12 +24,8 @@
 
 import logging
 import os
-import tarfile
-import time
 import traceback
 
-import config
-import general_task_mgr
 import rpc_utils
 
 

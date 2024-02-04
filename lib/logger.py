@@ -56,7 +56,6 @@ class MyLogHandler(logging.handlers.RotatingFileHandler, object):
         object ([type]): [description]
     """
 
-
     def __init__(self, *args, **kwargs):
         logging.handlers.RotatingFileHandler.__init__(self, *args, **kwargs)
 
@@ -83,7 +82,6 @@ def init(level, log_file: str, max_bytes=10 * 1024 * 1024, backup_count=5):
     global g_stdout_handle
     global g_file_handle
 
-
     logger = logging.getLogger()
 
     # formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
@@ -108,7 +106,6 @@ def init(level, log_file: str, max_bytes=10 * 1024 * 1024, backup_count=5):
 
     backup_logger = logging.getLogger('backup')
     backup_logger.setLevel(logging.WARNING)
-
 
 
 def reinit(level, log_file: str, max_bytes=10 * 1024 * 1024, backup_count=5):

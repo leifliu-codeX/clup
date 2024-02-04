@@ -51,7 +51,6 @@ def get_task_type_list_by_class(class_type: int) -> list:
         return []
 
 
-
 def register_task_callback(task_type, complete_callback):
     """
     注册某个任务类型的回调函数
@@ -166,10 +165,14 @@ def complete_task(task_id, state, msg, callback_args=dict()):
             try:
                 err_code, err_msg = complete_callback(callback_args)
                 if err_code != 0:
-                    err_msg = f"call task callback func failed: \n\ttask_id={task_id}\n\tstate={state}\n\tcallback_args={repr(callback_args)}\n\tmsg={msg}.\n\t======detail=====\n\t{err_msg}"
+                    err_msg = f"call task callback func failed: \n\ttask_id={task_id}\n\t" \
+                        f"state={state}\n\tcallback_args={repr(callback_args)}\n\tmsg={msg}.\n\t" \
+                        f"======detail=====\n\t{err_msg}"
                     logging.error(err_msg)
             except Exception:
-                err_msg = f"call task callback func failed:\n\ttask_id={task_id}\n\tstate={state}\n\tcallback_args={repr(callback_args)}\n\tmsg={msg}.\n\t======detail=====\n\t{traceback.format_exc()}"
+                err_msg = f"call task callback func failed:\n\ttask_id={task_id}\n\t" \
+                    f"state={state}\n\tcallback_args={repr(callback_args)}\n\tmsg={msg}.\n\t" \
+                    f"======detail=====\n\t{traceback.format_exc()}"
                 logging.error(err_msg)
                 err_code = -1
 

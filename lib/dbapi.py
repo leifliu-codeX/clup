@@ -44,7 +44,6 @@ def connect_db(host=None):
     return conn
 
 
-
 # 当同时需要执行有多个SQL时，可以放到with DBProcess() as dbp这个with块中，这样只连接数据库一次
 class DBProcess:
     """

@@ -829,7 +829,6 @@ def modify_db_in_cluster(req):
     db_id = pdict['db_id']
     db_dict = pdict
 
-
     del db_dict['cluster_id']
     del db_dict['db_id']
     db_detail = {
@@ -1576,7 +1575,6 @@ def change_db_ha_state(req):
     sql = "UPDATE clup_db SET state=%(state)s WHERE db_id=%(db_id)s"
     dbapi.execute(sql, pdict)
     return 200, 'OK'
-
 
 
 def check_ha(req):

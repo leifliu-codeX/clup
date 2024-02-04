@@ -46,8 +46,6 @@ g_q_reply = None     # 进程间接收已完成的命令的队列
 g_cmd_dict = {}
 g_cmd_dict_lock = threading.Lock()
 
-
-
 REQ_RUN_CMD = 1002
 REQ_RECV_CMD_RESULT = 1003
 
@@ -356,7 +354,6 @@ def get_desensitized_args(cmd_dict):
     return new_args
 
 
-
 def run_with_timeout(cmd_type, target_args, time_out=10):
     """
     :param host:
@@ -370,7 +367,6 @@ def run_with_timeout(cmd_type, target_args, time_out=10):
     """
     global g_q_request
     global g_q_reply
-
 
     cmd_dict = {}
     cmd_dict['req_action'] = REQ_RUN_CMD

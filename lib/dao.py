@@ -30,8 +30,6 @@ import database_state
 import db_encrypt
 import dbapi
 import psycopg2
-import rpc_utils
-import pg_db_lib
 
 from rpc_utils import get_rpc_connect
 
@@ -165,7 +163,6 @@ def get_all_cluster():
                        }
             ret_row.update(cluster_dict)
             ret_rows.append(ret_row)
-
 
         sql = """
         SELECT db_id,cluster_id,state pgdata, is_primary, repl_app_name, host, repl_ip FROM clup_db INNER JOIN
@@ -307,8 +304,7 @@ def register_host(ip, hostname, mem_size, cpu_cores, cpu_threads, os_type):
             if cpu_threads:
                 attr_dict['cpu_threads'] = cpu_threads
 
-            rows = dbp.query("INSERT INTO clup_host(ip, data) values(%s,%s) returning hid",
-                    (ip, json.dumps(attr_dict)))
+            rows = dbp.query("INSERT INTO clup_host(ip, data) values(%s,%s) returning hid", (ip, json.dumps(attr_dict)))
 
         else:
             attr_dict = rows[0]['data']
@@ -320,8 +316,7 @@ def register_host(ip, hostname, mem_size, cpu_cores, cpu_threads, os_type):
             if cpu_threads:
                 attr_dict['cpu_threads'] = cpu_threads
 
-            rows = dbp.query("UPDATE clup_host SET data = %s WHERE ip=%s returning hid",
-                    (json.dumps(attr_dict), ip))
+            rows = dbp.query("UPDATE clup_host SET data = %s WHERE ip=%s returning hid", (json.dumps(attr_dict), ip))
         return rows[0]['hid']
 
 
@@ -559,7 +554,6 @@ def get_primary_info(cluster_id):
     if not rows:
         return {}
     return rows[0]
-
 
 
 def get_db_state(db_id):
@@ -835,7 +829,6 @@ def create_replication_user(db_host, db_port, db_user, db_pass, repl_user, repl_
     except Exception as e:
         return -1, f'create user error: {repr(e)}'
     return 0, ''
-
 
 
 def format_byte(num):

@@ -24,6 +24,7 @@
 
 import os
 import sys
+import time
 import queue
 import errno
 import fcntl
@@ -190,17 +191,15 @@ def _handler_connect(sock, srv_obj):
                             rpc_info += f"\nkwargs={str_kwargs}"
                         logger.debug(rpc_info)
                 except Exception as e:
-                    err, _msg = cs_low_trans.reply_cmd(sock, 1,
-                                                      f"decode func args failed: {str(e)}".encode('utf-8'),
-                                                      srv_obj.timeout)
+                    err, _msg = cs_low_trans.reply_cmd(
+                        sock, 1, f"decode func args failed: {str(e)}".encode('utf-8'), srv_obj.timeout)
                     if err:
                         break
                     continue
 
                 if func_name not in srv_obj.srv_func_list:
-                    err, _msg = cs_low_trans.reply_cmd(sock, 1,
-                                                      ("Function(%s) does not exist" % func_name).encode('utf-8'),
-                                                      srv_obj.timeout)
+                    err, _msg = cs_low_trans.reply_cmd(
+                        sock, 1, ("Function(%s) does not exist" % func_name).encode('utf-8'), srv_obj.timeout)
                     if err:
                         break
                     continue
@@ -576,12 +575,11 @@ class Client:
         return f"csurpc({self.trans.ip}:{self.trans.port})"
 
 
-
+"""
 #############################################################################
 # 下面为测试代码                                                              #
 #############################################################################
-
-import time
+"""
 
 
 class _TestHandle:
@@ -650,6 +648,7 @@ def main():
         print("ASync call func1() return : %s" % ret1)
         ret2 = rs2.get(10)
         print("ASync call func2() return : %s" % ret2)
+
 
 if __name__ == '__main__':
     main()

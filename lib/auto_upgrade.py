@@ -27,7 +27,6 @@ import os
 import config
 import dbapi
 import run_lib
-import ip_lib
 
 from ipaddress import IPv4Address, IPv4Network
 
@@ -126,11 +125,15 @@ def create_default_vip_pool():
                     pool_info = vip_pool_info[vip_network]
                     if vip == cluster_info["vip"]:
                         # insert into clup_used_vip which used_reason = 1
-                        sql = "INSERT INTO clup_used_vip(pool_id, vip, db_id, cluster_id, used_reason) VALUES(%s, %s, %s, %s, 1) RETURNING vip"
+                        sql = """INSERT INTO clup_used_vip(pool_id, vip, db_id, cluster_id, used_reason)
+                            VALUES(%s, %s, %s, %s, 1) RETURNING vip
+                        """
                         vip_rows = dbp.query(sql, (pool_info["pool_id"], vip, cluster_info["primary_db_id"], cluster_id))
                     else:
                         # insert into clup_used_vip which used_reason = 2
-                        sql = "INSERT INTO clup_used_vip(pool_id, vip, cluster_id, used_reason) VALUES(%s, %s, %s, 2) RETURNING vip"
+                        sql = """INSERT INTO clup_used_vip(pool_id, vip, cluster_id, used_reason)
+                            VALUES(%s, %s, %s, 2) RETURNING vip
+                        """
                         vip_rows = dbp.query(sql, (pool_info["pool_id"], vip, cluster_id))
                     if not vip_rows:
                         return -1, f"Excute sql({sql}) failed."
