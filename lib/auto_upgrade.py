@@ -162,6 +162,7 @@ upgrade_func_list = [
     ['5.0.2', upgrade_common],
     ['5.0.4', upgrade_common],
     ['5.0.5', upgrade_with_vip_pool],
+    ['5.0.6', upgrade_common],
 ]
 
 
