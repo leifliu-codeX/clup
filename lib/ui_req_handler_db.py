@@ -134,10 +134,11 @@ def stop_db(req):
 
 
 def get_instance_list(req):
-    params = {'page_num': csu_http.INT,
-              'page_size': csu_http.INT,
-              'filter': 0
-              }
+    params = {
+        'page_num': csu_http.INT,
+        'page_size': csu_http.INT,
+        'filter': 0
+    }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
     err_code, pdict = csu_http.parse_parms(params, req)
@@ -2188,38 +2189,41 @@ def get_pg_log_file_list(req):
     if err_code != 0:
         return 400, pdict
 
-    # get the log_info
-    rpc = None
-    try:
-        db_conn_info = dao.get_db_conn_info(pdict['db_id'])
+    # get the db_info
+    sql = "SELECT host, pgdata FROM clup_db WHERE db_id = %s"
+    rows = dbapi.query(sql, (pdict['db_id'], ))
+    if not rows:
+        return 400, f"Cant find any records for the database(db_id={pdict['db_id']})."
+    db_info = dict(rows[0])
 
-        # get the host connection
-        code, result = rpc_utils.get_rpc_connect(db_conn_info["host"])
-        if code != 0:
-            return 400, f"Connect the host({db_conn_info['host']}) failed, {result}."
-        rpc = result
+    # try to connect the host
+    code, result = rpc_utils.get_rpc_connect(db_info["host"])
+    if code != 0:
+        return 400, f"Connect the host({db_conn_info['host']}) failed, {result}."
+    rpc = result
+
+    # get the log_info
+    try:
+        log_info = None
+
+        # get the database conn info
+        db_conn_info = dao.get_db_conn_info(pdict['db_id'])
 
         # if can connect the database,get log_info from pg_settings,else read from conf files
         if db_conn_info:
             # connect the database
             db_conn = dao.get_db_conn(db_conn_info)
-            if isinstance(db_conn, str):
-                return 400, db_conn
+            if not isinstance(db_conn, str):
+                # get the log_info
+                sql = "SELECT name, setting FROM pg_settings WHERE name in ('log_directory', 'log_destination', 'data_directory')"
+                rows = dao.sql_query(db_conn, sql)
+                if not rows:
+                    return 400, f"Execute sql({sql}) failed."
+                log_info = {row["name"]: row["setting"] for row in rows}
 
-            # get the log_info
-            sql = "SELECT name, setting FROM pg_settings WHERE name in ('log_directory', 'log_destination', 'data_directory')"
-            rows = dao.sql_query(db_conn, sql)
-            if not rows:
-                return 400, f"Execute sql({sql}) failed."
-            log_info = {row["name"]: row["setting"] for row in rows}
-        else:
+        if not log_info:
+            pgdata = db_info['pgdata']
             # read conf files to get the log_info
-            sql = "SELECT pgdata FROM clup_db WHERE db_id=%s"
-            rows = dbapi.query(sql, (pdict['db_id'], ))
-            if not rows:
-                return 400, f"Cant find any records for db_id={pdict['db_id']}."
-            pgdata = rows[0]['pgdata']
-
             log_info = {
                 'log_directory': 'log',
                 'log_destination': 'stderr',
@@ -2249,6 +2253,8 @@ def get_pg_log_file_list(req):
         pgdata = log_info['data_directory']
         log_directory = log_info["log_directory"]
         if not log_info["log_directory"].startswith("/"):
+            if "'" in log_info["log_directory"]:
+                log_info["log_directory"] = log_info["log_directory"].strip("'")
             log_directory = f"{pgdata}/{log_info['log_directory']}"
 
         # get the file_list_info
@@ -2293,6 +2299,7 @@ def get_pg_log_content(req):
     params = {
         "db_id": csu_http.INT,
         "page_num": csu_http.INT,
+        "read_size": csu_http.INT,
         "file_name": csu_http.MANDATORY,
         "log_directory": csu_http.MANDATORY,
         "log_destination": csu_http.MANDATORY
@@ -2314,7 +2321,7 @@ def get_pg_log_content(req):
     log_file_path = f"{pdict['log_directory']}/{pdict['file_name']}"
     rpc = None
     try:
-        read_size = 2048  # bytes
+        read_size = pdict['read_size']  # bytes number
 
         # connect the host
         code, result = rpc_utils.get_rpc_connect(db_info["host"])

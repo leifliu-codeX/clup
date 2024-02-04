@@ -38,6 +38,8 @@ import pg_db_lib
 import polar_lib
 import rpc_utils
 
+from general_utils import upload_file
+
 __author__ = 'tangcheng'
 
 
@@ -1559,3 +1561,109 @@ def task_build_polar_reader(task_id, rpc_dict):
     else:
         task_state = -1
     general_task_mgr.complete_task(task_id, task_state, err_msg)
+
+
+def install_csu_package(task_id, package_info, host_list):
+    """Install package, no start or restart
+
+    Args:
+        task_id (_type_): _description_
+        package_info (_type_): _description_
+        host_list (_type_): _description_
+    """
+
+    file_path = package_info['file_path']
+    os_user = package_info.get('os_user', None)
+    target_path = package_info.get('root_path', '/opt')
+
+    host_index = 0
+    total_hosts = len(host_list)
+    for host in host_list:
+        rpc = None
+        host_index += 1
+        progress = round(host_index / total_hosts, 2) * 100
+        general_task_mgr.log_info(task_id, f"Task({task_id}) progress: {host_index}/{total_hosts}-{progress}%.")
+
+        try:
+            # upload file and install
+            step = f"Install {package_info['package_name']} on host({host})"
+            general_task_mgr.log_info(task_id, f"{step}...")
+
+            # connect the host
+            general_task_mgr.log_info(task_id, f"{step}: Connect the host...")
+            code, result = rpc_utils.get_rpc_connect(host)
+            if code != 0:
+                general_task_mgr.log_error(task_id, f"{step}: Connect the host failed, {result}.")
+                continue
+            general_task_mgr.log_info(task_id, f"{step}: Connect the host success.")
+
+
+            rpc = result
+            # if has os_user,check or create
+            if os_user and not rpc.os_user_exists(os_user):
+                general_task_mgr.log_info(task_id, f"{step}: Create os_user({os_user})...")
+                # check is has os_uid
+                os_uid = package_info['settings'].get("os_uid", 0)
+                if os_uid and rpc.os_uid_exists(os_uid):
+                    os_uid = 0
+                # create os_user
+                code, result = pg_db_lib.pg_init_os_user(rpc, os_user, os_uid)
+                if code != 0:
+                    general_task_mgr.log_error(task_id, f"{step}: Create os_user({os_user}) on host failed, {result}.")
+                    continue
+                general_task_mgr.log_info(task_id, f"{step}: Create os_user({os_user}) success.")
+
+            # check the path is exist or make it
+            if not rpc.os_path_exists(target_path):
+                general_task_mgr.log_info(task_id, f"{step}: Create directory({target_path})...")
+                code, result = rpc.os_makedirs(target_path, 0o700, exist_ok=True)
+                if code != 0:
+                    general_task_mgr.log_error(task_id, f"{step}: Create directory({target_path}) failed, {result}.")
+                    continue
+                general_task_mgr.log_info(task_id, f"{step}: Create directory({target_path}) success.")
+
+            # upload file
+            target_file_path = os.path.join(target_path, package_info['file'])
+            general_task_mgr.log_info(task_id, f"{step}: Upload file({file_path}) to {target_path}...")
+            # check the file is exists or not
+            if not rpc.os_path_exists(target_file_path):
+                code, result = upload_file(host, file_path, target_file_path)
+                if code != 0:
+                    general_task_mgr.log_error(task_id, f"{step}: Upload file({file_path}) to {target_path} failed, {result}.")
+                    continue
+            general_task_mgr.log_info(task_id, f"{step}: Upload file({file_path}) to {target_path} success.")
+
+            # check need uncompress or not
+
+            # change the directory owner
+            general_task_mgr.log_info(task_id, f"{step}: Set the directory({target_path}) mode for user({os_user})...")
+            code, result = pg_db_lib.set_pg_data_dir_mode(rpc, os_user, target_file_path)
+            if code != 0:
+                general_task_mgr.log_error(task_id, f"{step}: Set the directory({target_path}) mode for user({os_user}) failed, {result}.")
+                continue
+            general_task_mgr.log_info(task_id, f"{step}: Set the directory({target_path}) mode for user({os_user}) success.")
+
+            general_task_mgr.log_info(task_id, f"{step}: Success.")
+        except Exception:
+            general_task_mgr.log_error(task_id, f"Install package with unexpected error, {traceback.format_exc()}.")
+        finally:
+            if rpc:
+                rpc.close()
+
+    return 0, "Complate"
+
+
+def task_install_csu_package(task_id, package_info, host_list):
+    try:
+        state_code = 1
+        code, result = install_csu_package(task_id, package_info, host_list)
+        if code != 0:
+            state_code = -1
+            msg = result
+        msg = "Success"
+    except Exception:
+        state_code = -1
+        msg = f"Install package with unexpected error, {traceback.format_exc()}."
+    finally:
+        general_task_mgr.complete_task(task_id, state_code, msg)
+

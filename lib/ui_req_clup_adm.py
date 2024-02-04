@@ -23,6 +23,7 @@
 @description: WEB界面的CLup自身管理接口后端服务处理模块
 """
 
+import os
 import json
 import logging
 # agent_log
@@ -35,9 +36,14 @@ import dbapi
 import ip_lib
 import logger
 import rpc_utils
+import long_term_task
+import general_task_mgr
+import task_type_def
 
 from pg_db_lib import is_running
 from pg_helpers import get_all_settings
+from zqpool_helpers import conf_sort as zqpool_conf_sort
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
@@ -441,5 +447,114 @@ def update_pg_settings(req):
     return 200, "Success"
 
 
-if __name__ == '__main__':
-    pass
+def add_csu_package(req):
+    """添加中启乘数提供的安装包
+
+    Args:
+        req (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+    params = {
+        'package_name': csu_http.MANDATORY,
+        'path': csu_http.MANDATORY,
+        'file': csu_http.MANDATORY,
+        'version': csu_http.MANDATORY,
+        'settings': csu_http.MANDATORY,
+        'conf_init': csu_http.MANDATORY
+    }
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    # check the packages is exists or not
+    sql = "SELECT * FROM csu_packages WHERE package_name = %s and version = %s"
+    rows = dbapi.query(sql, (pdict['package_name'], pdict['version']))
+    if rows:
+        return 400, f"The package (name={pdict['package_name']}, version={pdict['version']}) aready exists."
+
+    # insert into csu_packages table
+    pdict['settings'] = json.dumps(pdict['settings'])
+    pdict['conf_init'] = json.dumps(pdict['conf_init'])
+    sql = """INSERT INTO csu_packages(package_name, version, path, file, settings, conf_init)
+        VALUES(%(package_name)s, %(version)s, %(path)s, %(file)s, %(settings)s::jsonb, %(conf_init)s::jsonb) RETURNING package_id
+    """
+    rows = dbapi.query(sql, pdict)
+    if not rows:
+        return 400, f"Execute sql({sql}) failed."
+
+    return 200, "Success"
+
+
+def install_csu_package(req):
+    """安装中启乘数提供的一些软件包
+
+    Args:
+        req (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+    params = {
+        'os_user': csu_http.MANDATORY,
+        'package_id': csu_http.INT,
+        'root_path': csu_http.MANDATORY,
+        'host_list': csu_http.MANDATORY
+    }
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    # search the package info
+    sql = "SELECT * FROM csu_packages WHERE package_id = %s"
+    rows = dbapi.query(sql, (pdict['package_id'], ))
+    if not rows:
+        return 400, f"Cant find any records for the package(id={pdict['package_id']})."
+    package_info = dict(rows[0])
+
+    # check the csu_package file is exists
+    file_path = os.path.join(package_info['path'], package_info['file'])
+    if not os.path.exists(file_path):
+        return 400, f"The file({file_path}) is not exists."
+
+    package_info['file_path'] = file_path
+    package_info['os_user'] = pdict['os_user']
+    package_info['root_path'] = pdict['root_path']
+
+    # install packages
+    task_name = f"install package({package_info['package_name'], package_info['version']})"
+    task_id = general_task_mgr.create_task(task_type_def.INSTALL_PACKAGE, task_name,
+                            {'package_name': package_info['package_name'], "version": package_info['version']})
+    general_task_mgr.run_task(task_id, long_term_task.task_install_csu_package, (package_info, pdict["host_list"]))
+
+    ret_data = {"task_id": task_id, "task_name": task_name}
+    raw_data = json.dumps(ret_data)
+    return 200, raw_data
+
+
+def get_csu_package_info(req):
+    params = {
+        "package_name": csu_http.MANDATORY
+    }
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    where_cond = None
+    if pdict['package_name'] != "":
+        where_cond = "WHERE package_name like '{0}'".format(pdict['package_name'])
+    sql = f"SELECT package_id, package_name, version, conf_init FROM csu_packages {where_cond}"
+    rows = dbapi.query(sql)
+    if not rows:
+        return 400, f"Cant find any records for the package(name={pdict['package_name']})."
+
+    ret_list = list()
+    for row in rows:
+        row['package'] = "{0}: v{1}".format(row['package_name'], row['version'])
+        if 'zqpool' in row['package_name']:
+            row['init_conf'] = zqpool_conf_sort(row['conf_init'])
+        ret_list.append(dict(row))
+
+    ret_data = {"total": len(ret_list), "rows": ret_list}
+    return 200, json.dumps(ret_data)
