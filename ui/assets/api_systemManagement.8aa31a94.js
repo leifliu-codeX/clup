@@ -1,1 +1,0 @@
-import{P as t}from"./index.dfdb83b1.js";var e={getHostList:e=>t("/api/v1/get_host_list",e),addAlarmAPI:e=>t("/api/v1/add_alarm",e),removeHost:e=>t("/api/v1/remove_host",e),getPGSettings:e=>t("/api/v1/get_pg_settings",e),updatePGsettings:e=>t("/api/v1/update_pg_settings",e)};export{e as A};

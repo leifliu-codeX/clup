@@ -42,6 +42,7 @@ var g_memu_list = {
 				{ "path": "/clusterDefine", "iconCls": "el-icon-setting", "component": "clusterDefine", "name": "集群定义", "menuShow": true },
 				{ "path": "/HAManage", "iconCls": "iconfont el-icon-jqgl", "component": "HAManage", "name": "HA管理", "menuShow": true },
 				{ "path": '/VIPPoolManage', "iconCls": 'iconfont el-icon-suijiIPchi', "component": "VIPPoolManage", "name": 'VIP池管理', "menuShow": true },
+				{ "path": '/ConnectionPoolManagement', "iconCls": 'el-icon-orange', "component": "ConnectionPoolManagement", "name": '连接池管理', "menuShow": true },
 				{ "path": "/HALogView?logtype=3", "iconCls": "el-icon-tickets", "component": "HALogView", "name": "HA日志查看", "menuShow": true }
 			]
 		},

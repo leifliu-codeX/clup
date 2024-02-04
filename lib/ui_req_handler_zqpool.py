@@ -31,7 +31,6 @@ import csu_http
 import zqpool_helpers
 
 from copy import deepcopy
-from zqpool_helpers import send_request, get_zqpool_mgr_info
 
 
 def get_zqpool_list(req):
