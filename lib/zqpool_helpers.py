@@ -167,13 +167,13 @@ def conf_convert(pool_setting_dict):
 
 def get_zqpool_mgr_info(pool_id, is_zqpool_id=False):
     if is_zqpool_id:
-        sql = """SELECT zqpool_id, host, root_path,
+        sql = """SELECT zqpool_id, host, os_user, root_path,
             conf_data->'mgr_port' as mgr_port,
             conf_data->'mgr_token' as mgr_token
             FROM csu_zqpool WHERE zqpool_id = %s
         """
     else:
-        sql = """SELECT zq.zqpool_id, host, root_path,
+        sql = """SELECT zq.zqpool_id, host, os_user, root_path,
             zq.conf_data->'mgr_port' as mgr_port,
             zq.conf_data->'mgr_token' as mgr_token
             FROM csu_zqpool zq, csu_zqpool_pools pool
@@ -332,6 +332,76 @@ def init_zqpool_conf(rpc, root_path, mgr_setting_dict):
         return -1, f"Cant chmod the file({conf_file}) owner to (uid={st_dict['st_uid']}), {result}."
 
     return 0, "Init Success"
+
+
+def create_systemd_service(rpc, zqpool_id):
+    """_summary_
+
+    Args:
+        zqpool_info (_type_): _description_
+    """
+    zqpool_info = get_zqpool_mgr_info(zqpool_id, is_zqpool_id=True)
+    if not zqpool_info:
+        return -1, f"Cant find any records for the zqpool(id={zqpool_id})."
+
+    # check the file is exist or not
+    file = f"/etc/systemd/system/zqpool{zqpool_id}.service"
+    if rpc.os_path_exists(file):
+        return -1, f"The {file} is aready exist."
+
+    file_content = (
+        "[Unit]\n"
+        "Description=zqpool\n"
+        "After=network.target\n\n"
+        "[Service]\n"
+        "Type=simple\n"
+        f"User={zqpool_info['os_user']}\n"
+        f"ExecStart={zqpool_info['root_path']}/zqpool\n"
+        f"PIDFile=/run/zqpool{zqpool_id}.pid\n"
+        "KillMode=control-group\n\n"
+        "[Install]\n"
+        "WantedBy=multi-user.target"
+    )
+
+    # create file
+    code, result = rpc.os_write_file(file, 0, file_content.encode())
+    if code != 0:
+        return -1, f"Write content to the file failed, {result}."
+
+    # reload
+    cmd = "systemctl daemon-reload"
+    rpc.run_cmd(cmd)
+
+    return 0, "Success"
+
+
+def delete_systemd_servie(zqpool_id):
+    """_summary_
+
+    Args:
+        zqpool_id (_type_): _description_
+    """
+    zqpool_info = get_zqpool_mgr_info(zqpool_id, is_zqpool_id=True)
+    if not zqpool_info:
+        return -1, f"Cant find any records for the zqpool(id={zqpool_id})."
+
+    # connect the host
+    code, rpc = rpc_utils.get_rpc_connect(zqpool_info['host'])
+    if code != 0:
+        return -1, f"Cant connect the host({zqpool_info['host']})."
+
+    try:
+        # check the file is exist or not
+        file = f"/etc/systemd/system/zqpool{zqpool_id}.service"
+        if rpc.os_path_exists(file):
+            cmd = f"rm -f {file}"
+            code, err_msg, _ = rpc.run_cmd_result(cmd)
+            if code != 0:
+                return -1, f"Run the cmd({cmd}) failed, {err_msg}."
+    finally:
+        rpc.close()
+
+    return 0, "Success delete systemd service file."
 
 
 def get_pool_info(pool_id):
@@ -645,11 +715,17 @@ def create_zqpool(pdict, mgr_setting_dict):
         )
         if not rows:
             return -1, f"Excute sql({sql}) failed."
+        zqpool_id = rows[0]['zqpool_id']
 
         # init the conf file
         code, result = init_zqpool_conf(rpc, root_path, mgr_setting_dict)
         if code != 0:
             return -1, result
+
+        # create systemctl service
+        code, result = create_systemd_service(rpc, zqpool_id)
+        if code != 0:
+            return -1, f"Create the zqpool(id={zqpool_id}) success, but create systemctl service failed, {result}."
 
     except Exception:
         return -1, f"Create zqpool with unexpected error, {traceback.format_exc()}."
@@ -705,6 +781,25 @@ def add_zqpool(pdict):
                 pool_fe, state, conf_data) VALUES(%s, %s, 0, %s::jsonb)
             """
             dbapi.execute(insert_sql, (zqpool_id, pool_fe, json.dumps(setting_dict)))
+
+    rpc = None
+    try:
+        # connect the host and check or create the systemd service file
+        code, result = rpc_utils.get_rpc_connect(pdict['host'])
+        if code != 0:
+            return -1, f"Add zqpool success, but create the systemd service file failed, {result}."
+
+        rpc = result
+        service_file = os.path.join("/etc/systemd/system", f"zqpool{zqpool_id}.service")
+        if not rpc.os_path_exists(service_file):
+            code, result = create_systemd_service(rpc, zqpool_id)
+            if code != 0:
+                return -1, f"Add zqpool success, but create the systemd service file failed, {result}."
+    except Exception:
+        return -1, f"Add zqpool success, but create the systemd service file with unexpected error, {traceback.format_exc()}."
+    finally:
+        if rpc:
+            rpc.close()
 
     return 0, "Success"
 
@@ -823,10 +918,14 @@ def check_zqpool_state(zqpool_id):
     return 0, zqpool_state
 
 
-def start_zqpool(zqpool_info):
+def control_zqpool(zqpool_id, option):
+    zqpool_info = get_zqpool_mgr_info(zqpool_id, is_zqpool_id=True)
+    if not zqpool_info:
+        return -1, f"Cant find any records for the zqpool(id={zqpool_id})."
+
     host = zqpool_info['host']
-    os_user = zqpool_info['os_user']
-    root_path = zqpool_info['root_path']
+    # os_user = zqpool_info['os_user']
+    # root_path = zqpool_info['root_path']
 
     # connect the host
     code, result = rpc_utils.get_rpc_connect(host)
@@ -836,14 +935,18 @@ def start_zqpool(zqpool_info):
 
     # run start cmd
     try:
-        if os_user:
-            cmd = f"su - {os_user} -c 'cd {root_path} & nohup ./zqpool &'"
+        if option == 'start':
+            cmd = f"systemctl start zqpool{zqpool_id}"
         else:
-            cmd = f"cd {root_path} & nohup ./zqpool &"
+            cmd = f"systemctl stop zqpool{zqpool_id}"
+        # if os_user:
+        #     cmd = f"su - {os_user} -c 'cd {root_path} & nohup ./zqpool &'"
+        # else:
+        #     cmd = f"cd {root_path} & nohup ./zqpool &"
 
-        code = rpc.run_cmd(cmd)
+        code, err_msg, _ = rpc.run_cmd_result(cmd)
         if code != 0:
-            return -1, f"Run cmd({cmd}) failed."
+            return -1, f"Run cmd({cmd}) failed, {err_msg}."
 
         # sleep 3s
         time.sleep(3)
@@ -852,13 +955,14 @@ def start_zqpool(zqpool_info):
     finally:
         rpc.close()
 
-    # check the zqpool state
-    code, result = check_zqpool_state(zqpool_info['zqpool_id'])
-    if code != 0:
-        return -1, result
+    if option == 'start':
+        # check the zqpool state
+        code, result = check_zqpool_state(zqpool_info['zqpool_id'])
+        if code != 0:
+            return -1, result
 
-    if result != 1:
-        return -1, "The zqpool is not start."
+        if result != 1:
+            return -1, "The zqpool is not start."
 
     return 0, "Start zqpool success."
 

@@ -141,18 +141,22 @@ def online_zqpool(req):
     if err_code != 0:
         return 400, pdict
 
-    sql = """SELECT zqpool_id,
-        host, os_user, root_path,
-        conf_data->'mgr_port' as mgr_port,
-        conf_data->'mgr_token' as mgr_token
-        FROM csu_zqpool WHERE zqpool_id = %s
-    """
-    rows = dbapi.query(sql, (pdict['zqpool_id'], ))
-    if not rows:
-        return 400, f"Cant find any records for the zqpool(id={pdict['zqpool_id']})."
-    zqpool_info = dict(rows[0])
+    code, result = zqpool_helpers.control_zqpool(pdict['zqpool_id'], option='start')
+    if code != 0:
+        return 400, result
 
-    code, result = zqpool_helpers.start_zqpool(zqpool_info)
+    return 200, "Success"
+
+
+def offline_zqpool(req):
+    params = {
+        'zqpool_id': csu_http.INT
+    }
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    code, result = zqpool_helpers.control_zqpool(pdict['zqpool_id'], option='stop')
     if code != 0:
         return 400, result
 
@@ -215,6 +219,12 @@ def delete_zqpool(req):
     if err_code != 0:
         return 400, pdict
 
+    err_msg = None
+    # need delete the service file
+    code, result = zqpool_helpers.delete_systemd_servie(pdict['zqpool_id'])
+    if code != 0:
+        err_msg = result
+
     # check the zqpool has pool or not
     sql = "SELECT pool_id FROM csu_zqpool_pools WHERE zqpool_id = %s"
     rows = dbapi.query(sql, (pdict['zqpool_id'], ))
@@ -226,6 +236,9 @@ def delete_zqpool(req):
     # delete from csu_zqpool
     sql = "DELETE FROM csu_zqpool WHERE zqpool_id = %s"
     dbapi.execute(sql, (pdict['zqpool_id'], ))
+
+    if err_msg:
+        return 400, f"Delete the zqpool(id={pdict['zqpool']}) success, but delete the systemd service file failed, {err_msg}."
 
     return 200, "Delete Success"
 
