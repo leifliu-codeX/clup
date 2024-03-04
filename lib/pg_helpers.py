@@ -1667,6 +1667,11 @@ def get_pg_hba(db_id, db_conn=None, offset=None, limit=None):
 
 
 def backup_pg_hba(rpc, pgdata, backup_ident=False):
+    code, result = rpc.os_stat(pgdata)
+    if code != 0:
+        return -1, result
+    st_dict = result
+
     backup_path = os.path.join(pgdata, 'pg_hba_archive')
     if not rpc.os_path_exists(backup_path):
         # 创建目录
@@ -1674,32 +1679,37 @@ def backup_pg_hba(rpc, pgdata, backup_ident=False):
         if code != 0:
             return -1, result
 
-        code, result = rpc.os_stat(pgdata)
-        if code != 0:
-            return -1, result
-        st_dict = result
-
         code, result = rpc.os_chown(backup_path, st_dict['st_uid'], st_dict['st_gid'])
         if code != 0:
             err_msg = f"chown directory {backup_path} error: {result}"
             return -1, err_msg
 
-    current_time = time.strftime("%Y-%m-%d_%H%M%S", time.localtime())
+    current_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
 
     # backup the pg_hba file
     hba_file = os.path.join(pgdata, 'pg_hba.conf')
-    cmd = f"cp {hba_file} {backup_path}/pg_hba.conf-{current_time}"
+    new_file = f"{backup_path}/pg_hba.conf-{current_time}"
+    cmd = f"cp {hba_file} {new_file}"
     code, err_msg, _out_msg = rpc.run_cmd_result(cmd)
     if code != 0:
         return -1, f"Excute the cmd({cmd}) failed, {err_msg}."
+    # chown
+    err_code, err_msg = rpc.os_chown(new_file, st_dict['st_uid'], st_dict['st_gid'])
+    if err_code != 0:
+        return -1, f"Chown the file({new_file}) failed."
 
     # backup the ident file
     if backup_ident:
         ident_file = os.path.join(pgdata, 'pg_ident.conf')
-        cmd = f"cp {ident_file} {backup_path}/pg_ident.conf-{current_time}"
+        new_file = f"{backup_path}/pg_ident.conf-{current_time}"
+        cmd = f"cp {ident_file} {new_file}"
         code, err_msg, _out_msg = rpc.run_cmd_result(cmd)
         if code != 0:
             return -1, f"Excute the cmd({cmd}) failed, {err_msg}."
+        # chown
+        err_code, err_msg = rpc.os_chown(new_file, st_dict['st_uid'], st_dict['st_gid'])
+        if err_code != 0:
+            return -1, f"Chown the file({new_file}) failed."
 
     return 0, "Success"
 
