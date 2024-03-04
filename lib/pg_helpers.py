@@ -1666,6 +1666,44 @@ def get_pg_hba(db_id, db_conn=None, offset=None, limit=None):
     return 0, ret_list
 
 
+def backup_pg_hba(rpc, pgdata, backup_ident=False):
+    backup_path = os.path.join(pgdata, 'pg_hba_archive')
+    if not rpc.os_path_exists(backup_path):
+        # 创建目录
+        code, result = rpc.os_makedirs(backup_path, 0o700)
+        if code != 0:
+            return -1, result
+
+        code, result = rpc.os_stat(pgdata)
+        if code != 0:
+            return -1, result
+        st_dict = result
+
+        code, result = rpc.os_chown(backup_path, st_dict['st_uid'], st_dict['st_gid'])
+        if code != 0:
+            err_msg = f"chown directory {backup_path} error: {result}"
+            return -1, err_msg
+
+    current_time = time.strftime("%Y-%m-%d_%H%M%S", time.localtime())
+
+    # backup the pg_hba file
+    hba_file = os.path.join(pgdata, 'pg_hba.conf')
+    cmd = f"cp {hba_file} {backup_path}/pg_hba.conf-{current_time}"
+    code, err_msg, _out_msg = rpc.run_cmd_result(cmd)
+    if code != 0:
+        return -1, f"Excute the cmd({cmd}) failed, {err_msg}."
+
+    # backup the ident file
+    if backup_ident:
+        ident_file = os.path.join(pgdata, 'pg_ident.conf')
+        cmd = f"cp {ident_file} {backup_path}/pg_ident.conf-{current_time}"
+        code, err_msg, _out_msg = rpc.run_cmd_result(cmd)
+        if code != 0:
+            return -1, f"Excute the cmd({cmd}) failed, {err_msg}."
+
+    return 0, "Success"
+
+
 def delete_one_pg_hba(host, pgdata, line_number, is_reload=True):
     rpc = None
     try:
@@ -1675,15 +1713,29 @@ def delete_one_pg_hba(host, pgdata, line_number, is_reload=True):
             return -1, f"Connect the host({host}) failed, {result}."
         rpc = result
 
-        # delete from pg_hba.conf file
         hba_file = f"{pgdata}/pg_hba.conf"
         if not rpc.os_path_exists(hba_file):
             return -1, f"The file({hba_file}) is not exists."
-        del_line_number = line_number
-        del_cmd = f"sed -i '{del_line_number}d' {hba_file}"
+
+        # read the line contnent
+        cmd = f"sed -n '{line_number}p' {hba_file}"
+        code, err_msg, out_msg = rpc.run_cmd_result(cmd)
+        if code != 0:
+            return -1, f"Read the file content line({line_number}) failed, {err_msg}."
+        backup_ident = False
+        if "map" in out_msg:
+            backup_ident = True
+
+        # backup the conf files
+        code, result = backup_pg_hba(rpc, pgdata, backup_ident)
+        if code != 0:
+            return -1, f"Backup the conf file failed, {result}."
+
+        # delete the line
+        del_cmd = f"sed -i '{line_number}d' {hba_file}"
         code, err_msg, _out_msg = rpc.run_cmd_result(del_cmd)
         if code != 0:
-            return -1, f"Delete line({del_line_number}) from file({hba_file}) failed, {err_msg}."
+            return -1, f"Delete line({line_number}) from file({hba_file}) failed, {err_msg}."
 
         if is_reload:
             code, result = pg_db_lib.reload(host, pgdata)
@@ -1774,6 +1826,14 @@ def update_pg_hba(pdict, option="update"):
         hba_file = f"{db_info['pgdata']}/pg_hba.conf"
         if not rpc.os_path_exists(hba_file):
             return -1, f"The file({hba_file}) is not exists."
+
+        # backup current file
+        backup_ident = False
+        if "map" in conf_str:
+            backup_ident = True
+        code, result = backup_pg_hba(rpc, db_info['pgdata'], backup_ident)
+        if code != 0:
+            return -1, f"Backup the conf file failed, {result}."
 
         # replace the content for pg_hba.conf
         if option == "update":

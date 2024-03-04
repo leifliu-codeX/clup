@@ -2175,6 +2175,95 @@ def update_pg_hba(req):
     return 200, "Success"
 
 
+def get_history_hba(req):
+    """获取hba的历史文件列表
+
+    Args:
+        req (_type_): _description_
+    """
+    params = {
+        "db_id": csu_http.INT
+    }
+
+    # check request params
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    # get the db info
+    sql = "SELECT pgdata, host FROM clup_db WHERE db_id=%s"
+    rows = dbapi.query(sql, (pdict['db_id'], ))
+    if not rows:
+        return 400, f"Cant find any records for the database(db_id={pdict['db_id']})."
+    db_info = dict(rows[0])
+
+    # connect the host
+    code, result = rpc_utils.get_rpc_connect(db_info['host'])
+    if code != 0:
+        return 400, f"Connect the host failed, {result}."
+    rpc = result
+
+    try:
+        # get the file list
+        file_list = list()
+        dir_path = f"{db_info['pgdata']}/pg_hba_archive"
+        if not rpc.os_path_exists(dir_path):
+            return 200, json.dumps({"rows": file_list})
+
+        file_list = rpc.os_listdir(dir_path)
+        if not file_list:
+            file_list = list()
+    finally:
+        rpc.close()
+
+    file_list.reverse()
+    return 200, json.dumps({"rows": file_list})
+
+
+def get_hba_history_content(req):
+    """获取用户认证历史文件的内容
+
+    Args:
+        req (_type_): _description_
+    """
+    params = {
+        "db_id": csu_http.INT,
+        "file": csu_http.MANDATORY
+    }
+
+    # check request params
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    # get the database info
+    sql = "SELECT pgdata, host FROM clup_db WHERE db_id=%s"
+    rows = dbapi.query(sql, (pdict['db_id'], ))
+    if not rows:
+        return 400, f"Cant find any records for the database(db_id={pdict['db_id']})."
+    db_info = dict(rows[0])
+
+    # connect the host
+    code, result = rpc_utils.get_rpc_connect(db_info['host'])
+    if code != 0:
+        return 400, f"Connect the host failed, {result}."
+    rpc = result
+
+    file_path = f"{db_info['pgdata']}/pg_hba_archive/{pdict['file']}"
+    try:
+        # get the file content
+        if not rpc.os_path_exists(file_path):
+            return 400, f"The file({file_path}) is not exist."
+
+        code, result = rpc.file_read(file_path)
+        if code != 0:
+            return 400, f"Read the file content failed, {result}."
+
+        return 200, json.dumps({"content": result})
+    finally:
+        rpc.close()
+
+
 def get_pg_log_file_list(req):
     """获取pg日志文件列表
     """
