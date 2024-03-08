@@ -348,7 +348,7 @@ def recovery_standby(task_id, msg_prefix, recovery_host, pgdata):
             'polar_enable_shared_storage_mode'
         ]
         # edit the postgres.conf file
-        err_code, err_msg = polar_lib.disable_settings(rpc, postgresql_conf, remove_conf_list)
+        err_code, err_msg = pg_helpers.disable_settings(rpc, postgresql_conf, remove_conf_list)
         if err_code != 0:
             err_msg = f"""Restore file is ok, but edit the {postgresql_conf} failed,{err_msg},
             need disable the {remove_conf_list} by yourself.
@@ -359,7 +359,7 @@ def recovery_standby(task_id, msg_prefix, recovery_host, pgdata):
         rpc.modify_config_type1(postgresql_conf, {"polar_vfs.localfs_mode": "on"}, is_backup=False)
         # check postgres.auto.conf
         postgresql_auto_conf = f"{pgdata}/postgresql.auto.conf"
-        err_code, err_msg = polar_lib.disable_settings(rpc, postgresql_auto_conf, remove_conf_list)
+        err_code, err_msg = pg_helpers.disable_settings(rpc, postgresql_auto_conf, remove_conf_list)
         if err_code != 0:
             err_msg = f"""Restore file is ok, but edit the {postgresql_auto_conf} failed,{err_msg},
             need disable the {remove_conf_list} by yourself.

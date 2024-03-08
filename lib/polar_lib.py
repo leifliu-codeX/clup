@@ -1193,35 +1193,6 @@ def polar_share_to_local(task_id, msg_prefix, recovery_host, pgdata):
     return 0, "success"
 
 
-def disable_settings(rpc, file, remove_conf_list):
-    """disable settings in conf file
-    """
-    file_size = rpc.get_file_size(file)
-    if file_size < 0:
-        return 200, json.dumps({"err_code": -1, "err_msg": f'Failed to get the file size:(file_name={file})'})
-
-    err_code, err_msg = rpc.os_read_file(file, 0, file_size)
-    if err_code != 0:
-        return 200, json.dumps({"err_code": -1, "err_msg": f'Failed to obtain the file content:(file_name={file})'})
-    lines = err_msg.decode().split('\n')
-    new_content = ''
-    for line in lines:
-        is_remove = False
-        for remove_conf in remove_conf_list:
-            if remove_conf in line:
-                is_remove = True
-                break
-        if is_remove:
-            new_content = f"{new_content}#{line}\n"
-            continue
-        else:
-            new_content = f"{new_content}{line}\n"
-    err_code, err_msg = rpc.os_write_file(file, 0, new_content.encode())
-    if err_code != 0:
-        return err_code, err_msg
-    return 0, "Success"
-
-
 def check_disk_on_host(host, pfs_disk_name):
     """在主机上检查磁盘的mount情况
     如果发现pfs选中的磁盘或此盘的分区已经做为文件系统被mount上了,则不能作为为pfs的磁盘使用
