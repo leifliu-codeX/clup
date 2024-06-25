@@ -100,6 +100,8 @@ def failover_sr_cluster(cluster_id, pg, db_port, err_msg_list):
         if polar_type in polar_type_list:
             err_code, err_msg = polar_lib.start_pfs(pg['host'], pg['db_id'])
             if err_code != 0 and err_code != 1:
+                task_log_error(task_id, err_msg)
+                general_task_mgr.complete_task(task_id, -1, err_msg)
                 return -1, err_msg
         # end start pfs
         while cnt < retry_cnt:

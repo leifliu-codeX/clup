@@ -692,7 +692,6 @@ def sr_switch(task_id, cluster_id, db_id, primary_db, keep_cascaded=False):
             return 1, err_msg
         clu_state = res
     except Exception as e:
-        log_error(task_id, f'{pre_msg}: END.')
         err_msg = f"{pre_msg}: Unable to set the status of the cluster: {str(e)}"
         log_error(task_id, err_msg)
         general_task_mgr.complete_task(task_id, -1, err_msg)
@@ -709,12 +708,12 @@ def sr_switch(task_id, cluster_id, db_id, primary_db, keep_cascaded=False):
             msg = f"cluster({cluster_id}) has been deleted"
             logging.info(msg)
             general_task_mgr.complete_task(task_id, -1, f"cluster({cluster_id}) has been deleted")
-            return
+            return -1, msg
         err_code, db_room = pg_helpers.get_db_room(db_id)
         if err_code != 0:
             err_msg = f"Failed to obtain database(db_id={db_id}) room information: {db_room}"
             general_task_mgr.complete_task(task_id, -1, err_msg)
-            return
+            return -1, err_msg
 
         # 更新cluster_vip
         before_cluster_dict = pg_helpers.get_new_cluster_data(cluster_id, db_room['room_id'])
@@ -745,7 +744,10 @@ def sr_switch(task_id, cluster_id, db_id, primary_db, keep_cascaded=False):
             if 'version' not in db_dict:
                 err_code, err_msg = pg_helpers.renew_pg_bin_info(db_id)
                 if err_code != 0:
-                    return err_code, err_msg
+                    err_msg = f"Get the db version failed, {err_msg}."
+                    log_error(task_id, f"{pre_msg}: {err_msg}")
+                    general_task_mgr.complete_task(task_id, -1, err_msg)
+                    return -1, err_msg
                 renew_dict = err_msg
                 version = str(renew_dict['version'])
             else:
@@ -805,7 +807,7 @@ def sr_switch(task_id, cluster_id, db_id, primary_db, keep_cascaded=False):
 
         log_info(task_id, f"{pre_msg}: begin stopping current primary database({old_pri_db['host']})...")
         old_pri_db.setdefault('wait_time', 30)  # 停止数据库等待的时间
-        err_code, err_msg = pg_db_lib.stop(old_pri_db['host'], old_pri_db['pgdata'])
+        err_code, err_msg = pg_db_lib.stop(old_pri_db['host'], old_pri_db['pgdata'], wait_time=old_pri_db['wait_time'])
         if err_code != 0:
             msg = f"{pre_msg}: current primary database({old_pri_db['host']}) can not be stopped. ({err_msg})"
             log_error(task_id, f"{pre_msg}: current primary database({old_pri_db['host']}) can not be stopped; ({err_msg})")
@@ -834,7 +836,8 @@ def sr_switch(task_id, cluster_id, db_id, primary_db, keep_cascaded=False):
             # err_code, str_ver = rpc_utils.pg_version(old_pri_db['host'], old_pri_db['pgdata'])
             err_code, str_ver = pg_db_lib.pgdata_version(old_pri_db['host'], old_pri_db['pgdata'])
             if err_code != 0:
-                logging.error(f"In switch_primary, get pg version error: {str_ver}")
+                err_msg = f"In switch_primary, get pg version error: {str_ver}"
+                log_error(task_id, err_msg)
                 raise UserWarning
             pg_ver = float(str_ver)
             if pg_ver >= 10:
@@ -867,7 +870,7 @@ def sr_switch(task_id, cluster_id, db_id, primary_db, keep_cascaded=False):
                 log_info(task_id, f"{pre_msg}: add vip({vip}) to the original primary database({old_pri_db['host']}) completed.")
             except Exception:
                 log_error(task_id,
-                          f"{pre_msg} : an expected error occurred during add vip ({vip})"
+                          f"{pre_msg}: an expected error occurred during add vip ({vip})"
                           f" to original primary database({old_pri_db['host']}): {traceback.format_exc()}")
 
             if old_conninfo_dict:
@@ -880,7 +883,7 @@ def sr_switch(task_id, cluster_id, db_id, primary_db, keep_cascaded=False):
                     pg_db_lib.restart(db['host'], db['pgdata'])
 
             if isinstance(e, UserWarning):
-                log_info(task_id, f"{new_pri_db['host']}: failed!!!")
+                log_error(task_id, f"{pre_msg}: switch to {new_pri_db['host']} failed!!!")
                 general_task_mgr.complete_task(task_id, -1, err_msg)
                 return 1, err_msg
             else:
@@ -909,6 +912,7 @@ def sr_switch(task_id, cluster_id, db_id, primary_db, keep_cascaded=False):
         log_info(task_id, f'{pre_msg}: restart new pirmary database and wait it is ready ...')
         err_code, err_msg = pg_db_lib.start(new_pri_db['host'], new_pri_db['pgdata'])
         if err_code != 0:
+            general_task_mgr.complete_task(task_id, -1, err_msg)
             return -1, err_msg
 
         # 等待新主库滚日志到最新
@@ -921,8 +925,9 @@ def sr_switch(task_id, cluster_id, db_id, primary_db, keep_cascaded=False):
                 time.sleep(1)
                 continue
             else:
-                log_error(task_id, f"{pre_msg}: {err_msg}")
-                general_task_mgr.complete_task(task_id, -1, "Switch failed.")
+                err_msg = f"{pre_msg}: {err_msg}"
+                log_error(task_id, err_msg)
+                general_task_mgr.complete_task(task_id, -1, err_msg)
                 return -1, err_msg
         log_info(task_id, f'{pre_msg}: new pirmary database started and it is ready.')
 
@@ -977,16 +982,14 @@ def sr_switch(task_id, cluster_id, db_id, primary_db, keep_cascaded=False):
             # 更新数据库存的上级主库
             dao.update_up_db_id('null', new_pri_db['db_id'], 1)
 
-        log_info(task_id, f"{pre_msg}: "
-                          "change all standby database upper level primary database to new primary completed.")
+        log_info(task_id, f"{pre_msg}: change all standby database upper level primary database to new primary completed.")
 
         # 如果配置了切换时调用的数据库函数，则调用此函数
         trigger_db_name = cluster_dict['trigger_db_name']
         trigger_db_func = cluster_dict['trigger_db_func']
         # 如果配置了切换时调用的数据库函数，则调用此函数
         if trigger_db_name and trigger_db_func:
-            log_info(task_id,
-                     f"{pre_msg}: trigger db({trigger_db_name}) function({trigger_db_func}) in primary ...")
+            log_info(task_id, f"{pre_msg}: trigger db({trigger_db_name}) function({trigger_db_func}) in primary ...")
 
             db_user = clu_db_list[0]['db_user']
             db_pass = db_encrypt.from_db_text(clu_db_list[0]['db_pass'])
