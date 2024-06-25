@@ -42,8 +42,19 @@ var g_memu_list = {
 				{ "path": "/clusterDefine", "iconCls": "el-icon-setting", "component": "clusterDefine", "name": "集群定义", "menuShow": true },
 				{ "path": "/HAManage", "iconCls": "iconfont el-icon-jqgl", "component": "HAManage", "name": "HA管理", "menuShow": true },
 				{ "path": '/VIPPoolManage', "iconCls": 'iconfont el-icon-suijiIPchi', "component": "VIPPoolManage", "name": 'VIP池管理', "menuShow": true },
-				{ "path": '/ConnectionPoolManagement', "iconCls": 'el-icon-orange', "component": "ConnectionPoolManagement", "name": '连接池管理', "menuShow": true },
+				{ "path": '/ConnectionPoolManagement', "iconCls": 'el-icon-orange', "component": "ConnectionPoolManagement", "name": '连接池管理', "menuShow": false },
 				{ "path": "/HALogView?logtype=3", "iconCls": "el-icon-tickets", "component": "HALogView", "name": "HA日志查看", "menuShow": true }
+			]
+		},
+		{
+			"path": '/',
+			"component": "Home",
+			"name": '运维工具',
+			"menuShow": false,
+			"iconCls": 'el-icon-suitcase', // 图标样式class
+			"children": [
+				{ "path": '/ReSlotManagement', "iconCls": 'el-icon-c-scale-to-original', "component": "ReSlotManagement", "name": '复制槽管理', "menuShow": true },
+				{ "path": '/PublishSubscribeManagement', "iconCls": 'el-icon-reading', "component": "PublishSubscribeManagement", "name": '发布订阅管理', "menuShow": true },
 			]
 		},
 		{
