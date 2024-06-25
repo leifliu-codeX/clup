@@ -23,12 +23,12 @@
 """
 
 import os
+from ipaddress import IPv4Address, IPv4Network
 
 import config
 import dbapi
+import ip_lib
 import run_lib
-
-from ipaddress import IPv4Address, IPv4Network
 
 
 def get_dbapi_obj():
@@ -38,16 +38,18 @@ def get_dbapi_obj():
 
 def psql_run(sql_fn):
     db_dict = {
-        "db_name": config.get('db_name'),
-        "db_host": config.get('db_host'),
-        "db_port": config.get('db_port'),
-        "db_user": config.get('db_user'),
-        "db_pass": config.get('db_pass'),
-        "psql_cmd": config.get('psql_cmd')
+        "db_name": config.get("db_name"),
+        "db_host": config.get("db_host"),
+        "db_port": config.get("db_port"),
+        "db_user": config.get("db_user"),
+        "db_pass": config.get("db_pass"),
+        "psql_cmd": config.get("psql_cmd"),
     }
 
-    cmd = f"PGPASSWORD={db_dict['db_pass']} {db_dict['psql_cmd']} -h {db_dict['db_host']} " \
-          f"-p {db_dict['db_port']} -U{db_dict['db_user']} -d {db_dict['db_name']} -f {sql_fn}"
+    cmd = (
+        f"PGPASSWORD={db_dict['db_pass']} {db_dict['psql_cmd']} -h {db_dict['db_host']} "
+        f"-p {db_dict['db_port']} -U{db_dict['db_user']} -d {db_dict['db_name']} -f {sql_fn}"
+    )
 
     #  当前默认使用的数据库软件是clup机器上的
     err_code, err_msg, out_msg = run_lib.run_cmd_result(cmd)
@@ -58,39 +60,42 @@ def psql_run(sql_fn):
 
 def upgrade_common(v1, v2):
     sql_path = config.get_sql_path()
-    sql_scripts = os.path.join(sql_path, f'v{v1}_v{v2}.sql')
+    sql_scripts = os.path.join(sql_path, f"v{v1}_v{v2}.sql")
     try:
         err_code, err_msg, _out_msg = psql_run(sql_scripts)
         if err_code != 0:
             return err_code, err_msg
     except Exception as e:
         return -1, f"run sql file error: \n{sql_scripts}\n{str(e)}\n"
-    return 0, ''
+    return 0, ""
 
 
 def create_default_vip_pool():
-    """建立默认的vip池
-    """
+    """建立默认的vip池"""
     # 获取所有已配置的vip
-    sql = "SELECT c.cluster_id,c.cluster_data->'rooms' as rooms,c.cluster_data->>'vip' as vip, " \
+    sql = (
+        "SELECT c.cluster_id,c.cluster_data->'rooms' as rooms,c.cluster_data->>'vip' as vip, "
         " db_id FROM clup_cluster c,clup_db db WHERE c.cluster_id=db.cluster_id AND db.is_primary=1"
+    )
     rows = dbapi.query(sql)
 
     cluster_info_list = list()
-    # 默认的vip池的掩码位数都是24
+    # 这里默认vip池的掩码位数都是24
     for cluster_info in rows:
-        cluster_info_list.append({
-            "vip": cluster_info["vip"],
-            "primary_db_id": cluster_info["db_id"],
-            "cluster_id": cluster_info["cluster_id"],
-            "vip_list": [room_info["vip"] for room_info in cluster_info["rooms"].values()]
-        })
+        cluster_info["primary_db_id"] = cluster_info["db_id"]
+        if cluster_info.get("rooms"):
+            cluster_info["vip_list"] = [
+                room_info["vip"] for room_info in cluster_info["rooms"].values()
+            ]
+        else:
+            cluster_info["vip_list"] = [cluster_info["vip"]]
+        cluster_info_list.append(cluster_info)
 
     vip_info = dict()
     # get all vip network and vip list
     for cluster_info in cluster_info_list:
         for vip in cluster_info["vip_list"]:
-            vip_network = str(IPv4Network(f'{vip}/24', strict=False))
+            vip_network = str(IPv4Network(f"{vip}/24", strict=False))
             if vip_network not in vip_info:
                 vip_info[vip_network] = list()
 
@@ -101,21 +106,22 @@ def create_default_vip_pool():
             # create vip pool
             vip_pool_info = dict()
             for vip_network, vip_list in vip_info.items():
-                start_ip = min(vip_list)
-                end_ip = max(vip_list)
+                start_vip = str(IPv4Address(min(vip_list)))
+                end_vip = str(IPv4Address(max(vip_list)))
 
-                # insert into clup_vip_pool
+                # vip_str_list = [str(IPv4Address(vip)) for vip in vip_list]
+                # code, result = ip_lib.convert_vip_list(vip_str_list)
+                # if code != 0:
+                #     return -1, result
+                # vip_str_list = result.split(",")
+
                 sql = "INSERT INTO clup_vip_pool(start_ip, end_ip, mask_len) VALUES(%s, %s, 24) RETURNING pool_id"
-                pool_rows = dbp.query(sql, (str(IPv4Address(start_ip)), str(IPv4Address(end_ip))))
+                pool_rows = dbp.query(sql, (start_vip, end_vip))
                 if not pool_rows:
                     return -1, f"Excute sql({sql}) failed."
 
                 if vip_network not in vip_pool_info:
-                    vip_pool_info[vip_network] = {
-                        "pool_id": pool_rows[0]["pool_id"],
-                        "start_ip": start_ip,
-                        "end_vip": end_ip
-                    }
+                    vip_pool_info[vip_network] = {"pool_id": pool_rows[0]["pool_id"]}
 
             # add used vip
             for cluster_info in cluster_info_list:
@@ -128,13 +134,23 @@ def create_default_vip_pool():
                         sql = """INSERT INTO clup_used_vip(pool_id, vip, db_id, cluster_id, used_reason)
                             VALUES(%s, %s, %s, %s, 1) RETURNING vip
                         """
-                        vip_rows = dbp.query(sql, (pool_info["pool_id"], vip, cluster_info["primary_db_id"], cluster_id))
+                        vip_rows = dbp.query(
+                            sql,
+                            (
+                                pool_info["pool_id"],
+                                vip,
+                                cluster_info["primary_db_id"],
+                                cluster_id,
+                            ),
+                        )
                     else:
                         # insert into clup_used_vip which used_reason = 2
                         sql = """INSERT INTO clup_used_vip(pool_id, vip, cluster_id, used_reason)
                             VALUES(%s, %s, %s, 2) RETURNING vip
                         """
-                        vip_rows = dbp.query(sql, (pool_info["pool_id"], vip, cluster_id))
+                        vip_rows = dbp.query(
+                            sql, (pool_info["pool_id"], vip, cluster_id)
+                        )
                     if not vip_rows:
                         return -1, f"Excute sql({sql}) failed."
 
@@ -146,7 +162,7 @@ def create_default_vip_pool():
 
 def upgrade_with_vip_pool(v1, v2):
     sql_path = config.get_sql_path()
-    sql_scripts = os.path.join(sql_path, f'v{v1}_v{v2}.sql')
+    sql_scripts = os.path.join(sql_path, f"v{v1}_v{v2}.sql")
     try:
         err_code, err_msg, _out_msg = psql_run(sql_scripts)
         if err_code != 0:
@@ -156,22 +172,22 @@ def upgrade_with_vip_pool(v1, v2):
             return -1, result
     except Exception as e:
         return -1, f"run sql file error: \n{sql_scripts}\n{str(e)}\n"
-    return 0, ''
+    return 0, ""
 
 
 upgrade_func_list = [
     ["5.0.0", upgrade_common],
-    ['5.0.1', upgrade_common],
-    ['5.0.2', upgrade_common],
-    ['5.0.4', upgrade_common],
-    ['5.0.5', upgrade_with_vip_pool],
-    ['5.0.6', upgrade_common],
+    ["5.0.1", upgrade_common],
+    ["5.0.2", upgrade_common],
+    ["5.0.4", upgrade_common],
+    ["5.0.5", upgrade_with_vip_pool],
+    ["5.0.6", upgrade_common],
 ]
 
 
 def cmp_version(ver1, ver2):
-    items1 = ver1.split('.')
-    items2 = ver2.split('.')
+    items1 = ver1.split(".")
+    items2 = ver2.split(".")
     cnt = len(items1)
     for i in range(cnt):
         if i >= len(items2):
@@ -198,16 +214,16 @@ def check_and_upgrade():
         # 找到当前版本，放到db_version
         sql = "select count(*) as cnt from pg_class where relname = 'clup_settings' and relkind = 'r'"
         rows = upgrade_dbapi.query(sql)
-        if rows[0]['cnt'] <= 0:
-            db_version = '0.0'
+        if rows[0]["cnt"] <= 0:
+            db_version = "0.0"
         else:
             sql = "SELECT content FROM clup_settings where key='db_version'"
             rows = upgrade_dbapi.query(sql)
             if len(rows) <= 0:
-                db_version = '0.0'
+                db_version = "0.0"
             else:
-                db_version = rows[0]['content']
-        pre_version = '1.0'
+                db_version = rows[0]["content"]
+        pre_version = "1.0"
         for item in upgrade_func_list:
             version = item[0]
             if cmp_version(item[0], db_version) > 0:
@@ -222,4 +238,4 @@ def check_and_upgrade():
             pre_version = version
     except Exception as e:
         return -1, str(e)
-    return 0, ''
+    return 0, ""

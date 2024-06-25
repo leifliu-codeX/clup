@@ -45,7 +45,8 @@ import ui_req_handler_db
 import ui_req_handler_ha
 import ui_req_handler_host
 import ui_req_handler_task
-import ui_req_handler_zqpool
+# import ui_req_handler_zqpool
+# import ui_req_handler_tools
 import version
 
 exit_flag = 0
@@ -91,7 +92,8 @@ def check_and_gen_handler():
         ui_req_handler_ha,
         ui_req_handler_host,
         ui_req_handler_task,
-        ui_req_handler_zqpool
+        # ui_req_handler_zqpool,
+        # ui_req_handler_tools
     ]
 
     ui_api_dict = {}
