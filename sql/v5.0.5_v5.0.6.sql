@@ -1,4 +1,4 @@
-CREATE TABLE csu_packages(
+CREATE TABLE IF NOT EXISTS csu_packages(
     package_id serial primary key,
     package_name varchar(100),
     version varchar(10),
@@ -8,9 +8,8 @@ CREATE TABLE csu_packages(
     conf_init jsonb
 );
 
-ALTER TABLE csu_packages ADD CONSTRAINT package_name_version UNIQUE (package_name, version);
 
-CREATE TABLE csu_zqpool(
+CREATE TABLE IF NOT EXISTS csu_zqpool(
     zqpool_id  serial primary key,
     zqpool_name text,
     package_id integer,
@@ -25,7 +24,7 @@ COMMENT ON COLUMN csu_zqpool.state IS '连接池状态: Online=1, Offline=0, Unk
 COMMENT ON COLUMN csu_zqpool.package_id IS 'zqpool的版本和默认配置信息,从csu_packages重查看';
 
 
-CREATE TABLE csu_zqpool_pools(
+CREATE TABLE IF NOT EXISTS csu_zqpool_pools(
     pool_id   serial primary key,  -- 非zqpool配置文件中的poolID
     zqpool_id integer,
     pool_fe   text,                -- fe_user.fe_dbname

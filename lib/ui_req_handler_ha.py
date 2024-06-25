@@ -28,6 +28,7 @@ import logging
 import os
 import time
 import traceback
+from ipaddress import IPv4Address, IPv4Network
 
 import cluster_state
 import csu_http
@@ -45,8 +46,6 @@ import pg_helpers
 import polar_lib
 import rpc_utils
 import task_type_def
-
-from ipaddress import IPv4Network, IPv4Address
 
 
 def get_cluster_list(req):
@@ -2135,7 +2134,7 @@ def get_vip_pool(req):
         return 400, pdict
 
     offset = (pdict['page_num'] - 1) * pdict['page_size']
-    sql = "SELECT * FROM clup_vip_pool LIMIT %s OFFSET %s"
+    sql = "SELECT * FROM clup_vip_pool ORDER BY pool_id LIMIT %s OFFSET %s"
     rows = dbapi.query(sql, (pdict['page_size'], offset))
 
     # get the vip pool total vip number and free vip number
