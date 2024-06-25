@@ -24,6 +24,7 @@
 
 import os
 import re
+from ipaddress import IPv4Address
 
 import dbapi
 import run_lib
@@ -220,20 +221,20 @@ def check_and_add_vip(vip):
 
 def check_vip_in_pool(pool_id, vip, no_used_check=False):
     # get the vip pool infor
-    sql = "SELECT vip_list FROM clup_vip_pool WHERE pool_id=%s"
+    sql = "SELECT start_ip, end_ip, mask_len FROM clup_vip_pool WHERE pool_id = %s"
     rows = dbapi.query(sql, (pool_id,))
     if not rows:
         return -1, f"Cant find any recard for vip pool(pool_id={pool_id})."
-    code, result = convert_vip_list(",".join(rows[0]["vip_list"]))
-    if code != 0:
-        return -1, result
-    vip_list = result
+    pool_info = rows[0]
 
-    if vip not in vip_list:
+    vip_int = int(IPv4Address(vip))
+    if vip_int < int(IPv4Address(pool_info["start_ip"])) or vip_int > int(
+        IPv4Address(pool_info["end_ip"])
+    ):
         return -1, "This vip is not in the vip pool, please check."
 
     if no_used_check:
-        sql = "SELECT pool_id, db_id, used_reason FROM clup_vip_used WHERE vip=%s"
+        sql = "SELECT pool_id, db_id, used_reason FROM clup_used_vip WHERE vip = %s"
         rows = dbapi.query(sql, (vip,))
         if rows:
             return -1, f"This vip is aready used for (db_id={rows[0]['db_id']})."
