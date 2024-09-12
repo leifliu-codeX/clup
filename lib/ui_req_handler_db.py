@@ -42,7 +42,6 @@ import pg_helpers
 import polar_helpers
 import polar_lib
 import rpc_utils
-
 from ha_mgr import get_repl_delay as ha_mgr_get_repl_delay
 
 
@@ -724,20 +723,28 @@ def modify_db_conf(req):
     if err_code != 0:
         return 400, pdict
 
-    # 此参数只能在备库中修改,不能在主库中修改(无效)或者同步到备库
-    if pdict["setting_name"] == "primary_conninfo":
-        return 400, json.dumps({"msg": "primary_conninfo parameter cant modify in primary database."})
+    # 检查当前要修改的数据库是否是主库
+    sql = "SELECT is_primary FROM clup_db WHERE db_id=%s"
+    rows = dbapi.query(sql, (pdict["db_id"], ))
+    if not rows:
+        return 400, f"Cant find records for the database(db_id={pdict['db_id']})."
+    is_primary = rows[0]["is_primary"]
 
-    # 修改主库参数
+    # 此参数只能在备库中修改,不能在主库中修改(无效)，也不支持同步修改备库，因为有些项需要设置的值不统一
+    if is_primary and pdict["setting_name"] == "primary_conninfo":
+        return 400, "primary_conninfo parameter cant modify in primary database."
+
+    # 修改当前实例的参数
     more_msg = None
     err_code, err_msg = pg_helpers.modify_db_conf(pdict)
     if err_code != 0:
         return 400, err_msg
 
     # 这四个参数备库数值不小于主库
-    need_check_settings = ['max_connections', 'max_prepared_transactions', 'max_worker_processes', 'max_locks_per_transaction']
-    # if modify
-    if not pdict.get("need_sync"):
+    # FIXME: 此处应该进一步判断备库中的值，而不是直接同步修改
+    need_check_settings = ['max_connections',
+        'max_prepared_transactions', 'max_worker_processes', 'max_locks_per_transaction']
+    if is_primary and not pdict.get("need_sync"):
         if pdict['setting_name'] in need_check_settings:
             if int(pdict["setting_value"]) > int(pdict["current_value"]):
                 pdict['need_sync'] = 1
@@ -746,11 +753,11 @@ def modify_db_conf(req):
     if not pdict.get('need_sync'):
         return 200, json.dumps({"msg": "primary database parameter modification completed."})
 
-    # 如果需要同步修改
+    # 如果需要同步修改,找到所有相关联的数据库实例
+    err_db_list = []
     more_msg = "primary database parameter modification completed"
     db_list = dao.get_all_cascaded_db(pdict["db_id"])
     db_id_list = [db['db_id'] for db in db_list]
-    err_db_list = []
     try:
         for db_id in db_id_list:
             if db_id == pdict['db_id']:
