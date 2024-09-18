@@ -63,7 +63,8 @@ def start_db(req):
     if polar_type in polar_type_list:
         # 如果是只读节点,判断其是否有recovery.conf文件,没有的话不能启动,否则会导致主库无法启动
         if polar_type == 'reader':
-            err_code, err_msg = polar_lib.is_exists_recovery(db_dict['host'], db_dict['pgdata'])
+            polar_version = int(db_dict["version"].split(".")[0])
+            err_code, err_msg = polar_lib.is_exists_recovery(db_dict['host'], db_dict['pgdata'], polar_version)
             if err_code != 0:
                 return 400, err_msg
         err_code, err_msg = polar_lib.start_pfs(db_dict['host'], db_id)
@@ -279,6 +280,7 @@ def create_polardb(req):
     if err_code != 0:
         return 400, err_msg
 
+    # test connect the host
     err_code, err_msg = rpc_utils.get_rpc_connect(host)
     if err_code != 0:
         return 400, f'Host connection failure ({host}),please check service clup-agent is running!'
@@ -287,7 +289,13 @@ def create_polardb(req):
     try:
         # if params has pfs_disk_name, build with pfs shared disk
         if pdict.get('pfs_disk_name'):
-            err_code, err_msg = polar_helpers.create_polardb_with_pfs(pdict)
+            # parese params
+            pfs_info = {
+                "polar_datadir": pdict["polar_datadir"],
+                "pfs_disk_name": pdict["pfs_disk_name"],
+                'pfsdaemon_params': pdict["pfsdaemon_params"]
+            }
+            err_code, err_msg = polar_helpers.create_polardb_with_pfs(pdict, pfs_info)
             if err_code != 0:
                 return 400, err_msg
         else:
@@ -315,19 +323,20 @@ def delete_db(req):
         return 400, pdict
     db_id = pdict['db_id']
 
-    sql = """ SELECT cluster_id,clup_cluster.state as state, host,pgdata,instance_name,port,
-            db_detail->>'instance_type' as instance_type, db_detail->>'db_user' as db_user,
-            db_detail->>'polar_type' as polar_type, db_detail->>'os_user' as os_user
-            FROM clup_db left join clup_cluster using (cluster_id) WHERE db_id = %(db_id)s """
+    sql = """SELECT cluster_id,clup_cluster.state as state,host,pgdata,instance_name,port,
+    db_detail->>'instance_type' as instance_type, db_detail->>'db_user' as db_user,
+    db_detail->>'polar_type' as polar_type, db_detail->>'os_user' as os_user
+    FROM clup_db left join clup_cluster using (cluster_id) WHERE db_id = %(db_id)s
+    """
     rows = dbapi.query(sql, pdict)
     if len(rows) == 0:
         return 400, 'The instance does not exist'
-    db = rows[0]
-    host = db['host']
-    pgdata = db['pgdata']
+    db_info = rows[0]
+    host = db_info['host']
+    pgdata = db_info['pgdata']
 
-    if db['cluster_id'] and db['state'] == 1:
-        return 400, f"Database owning cluster (cluster_id:{db['cluster_id']})is online,perform this operation offline!"
+    if db_info['cluster_id'] and db_info['state'] == 1:
+        return 400, f"Database owning cluster (cluster_id:{db_info['cluster_id']})is online,perform this operation offline!"
     sql = "SELECT count(*) FROM clup_db WHERE up_db_id = %(db_id)s "
     count_rows = dbapi.query(sql, pdict)
     if count_rows[0]['count'] > 0:
@@ -335,13 +344,12 @@ def delete_db(req):
 
     # 检查是否为polardb的备库,是则需要删除主库中的复制槽
     more_msg = ''
-    db['db_id'] = db_id
     polar_type_list = ['reader', 'standby']
-    polar_type = db.get("polar_type", None)
+    polar_type = db_info.get("polar_type", None)
     if polar_type in polar_type_list:
-        err_code, err_msg = polar_lib.delete_polar_replica(db)
-        if err_code != 0:
-            more_msg = err_msg
+        code, result = polar_lib.delete_polar_replica(db_id)
+        if code != 0:
+            more_msg = result
 
     if pdict.get('rm_pgdata'):
         err_code, err_msg = rpc_utils.get_rpc_connect(host)
@@ -356,7 +364,7 @@ def delete_db(req):
 
             # polar_test 判断是否为polardb数据库,如果是且为master节点则删除共享文件夹
             if polar_type == "master":
-                err_code, err_msg = polar_lib.delete_polar_datadir(rpc, pdict)
+                err_code, err_msg = polar_lib.delete_polar_datadir(rpc, db_id)
                 if err_code != 0:
                     more_msg += err_msg
             # polar_test end
@@ -364,12 +372,12 @@ def delete_db(req):
             rpc.close()
 
     # 删除的数据库如果是集群最后一个数据库,需要解绑vip
-    if db['cluster_id']:
+    if db_info['cluster_id']:
         check_sql = "select db_id from clup_db where cluster_id = %s"
-        count = dbapi.query(check_sql, (db['cluster_id'],))
+        count = dbapi.query(check_sql, (db_info['cluster_id'],))
         if len(count) == 1:
             vip_sql = "select cluster_data->>'vip' as vip from clup_cluster where cluster_id = %s"
-            vip_rows = dbapi.query(vip_sql, (db['cluster_id'],))
+            vip_rows = dbapi.query(vip_sql, (db_info['cluster_id'],))
             vip = vip_rows[0]['vip']
             rpc_utils.check_and_del_vip(host, vip)
 
@@ -1538,20 +1546,31 @@ def renew_pg_bin_info(req):
 def get_init_db_conf(req):
     params = {
         'version': csu_http.MANDATORY,
+        "db_type": 0,
     }
     err_code, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 400, pdict
-    sql = "SELECT setting_name, val, unit, setting_type, notes, min_val, max_val, enumvals, order_id, common_level FROM clup_init_db_conf"\
-          " WHERE %(version)s::numeric >= min_version AND %(version)s::numeric <= max_version"
-    version = pdict['version']
+
     # 只取两位,如9.3.5,取9.3
-    version = '.'.join(version.split('.')[:2])
-    pdict['version'] = version
+    version = pdict['version']
+    pdict['version'] = '.'.join(version.split('.')[:2])
+
+    sql = """SELECT setting_name, val, unit, setting_type,
+    notes, min_val, max_val, enumvals, order_id, common_level FROM clup_init_db_conf
+    WHERE %(version)s::numeric >= min_version AND %(version)s::numeric <= max_version
+    """
     rows = dbapi.query(sql, pdict)
+
     init_conf_dict = {}
     name_common_level_dict = {}
     for row in rows:
+        if pdict.get("db_type", 1) == 11 and row["setting_name"] == "log_destination":
+            # 对于PolarDB,如果是15版本,log_destination的值不能时csvlog
+            major_version = int(float(pdict["version"]))
+            if major_version >= 15:
+                row["val"] = "stderr"
+
         init_conf_dict[row['setting_name']] = row
         name_common_level_dict[row['setting_name']] = row['common_level']
 

@@ -1632,7 +1632,6 @@ def create_polar_sd_cluster(req):
         'repl_pass': csu_http.MANDATORY,
         'db_list': csu_http.MANDATORY,
         'db_type': csu_http.MANDATORY,
-        'remark': 0,
         'trigger_db_name': 0,
         'trigger_db_func': 0,
         'probe_db_name': csu_http.MANDATORY,
@@ -1653,11 +1652,18 @@ def create_polar_sd_cluster(req):
     if err_code != 0:
         return 400, pdict
 
-    # check vip is exists or not
+    # check vip is useed or not
     check_sql = "SELECT * FROM clup_used_vip WHERE vip=%s"
     check_rows = dbapi.query(check_sql, (pdict["vip"], ))
     if check_rows:
         return 400, f"The vip({pdict['vip']}) is aready used by(db_id={check_rows[0]['db_id']},cluster_id={check_rows[0]['cluster_id']}), please check."
+
+    # 检查数据库信息是否已经存在
+    for db in pdict['db_list']:
+        sql = "SELECT db_id FROM clup_db WHERE host=%s AND port = %s AND pgdata= %s "
+        rows = dbapi.query(sql, (db['host'], pdict['port'], db['pgdata']))
+        if len(rows) > 0:
+            return 400, f"Input database information({db['host']}:{pdict['port']} pgdata={db['pgdata']}) is the same as the database(db_id={rows[0]['db_id']})!"
 
     # 检查rpc是否能够连接上
     err_host_list = []
@@ -1669,19 +1675,31 @@ def create_polar_sd_cluster(req):
     if err_host_list:
         return 400, f"Host connection failure({str(err_host_list)}), please check service clup-agent is running!"
 
+    # 参数解析
+    # pfs 信息
+    pfs_info = {
+        "pfs_disk_name": pdict["pfs_disk_name"],
+        "polar_datadir": pdict["polar_datadir"],
+        "pfsdaemon_params": pdict["pfsdaemon_params"]
+    }
+    # 数据库节点信息
+    master_node_info = pdict["db_list"][0]
+    reader_node_info_list = pdict["db_list"][1:]
+
+    master_node_info["port"] = pdict["port"]
+    master_node_info["db_user"] = pdict["db_user"]
+    master_node_info["db_pass"] = pdict["db_pass"]
+    master_node_info["repl_user"] = pdict["repl_user"]
+    master_node_info["repl_pass"] = pdict["repl_pass"]
+    master_node_info["wal_segsize"] = pdict["wal_segsize"]
+    master_node_info["setting_list"] = pdict["setting_list"]
+
     # 定义cluster_data
     cluster_data = pdict.copy()
     del cluster_data['db_list']
     del cluster_data["setting_list"]
     cluster_data['ignore_reset_cmd_return_code'] = pdict.get('ignore_reset_cmd_return_code', 0)
     cluster_data['polar_hostid'] = len(pdict['db_list']) + 1
-
-    # 检查数据库信息是否已经存在
-    for db in pdict['db_list']:
-        sql = "SELECT db_id FROM clup_db WHERE host=%s AND port = %s AND pgdata= %s "
-        rows = dbapi.query(sql, (db['host'], pdict['port'], db['pgdata']))
-        if len(rows) > 0:
-            return 400, f"Input database information({db['host']}:{pdict['port']} pgdata={db['pgdata']}) is the same as the database(db_id={rows[0]['db_id']})!"
 
     # 插入集群表
     sql = "INSERT INTO clup_cluster(cluster_type, cluster_data,state,lock_time) " \
@@ -1690,7 +1708,6 @@ def create_polar_sd_cluster(req):
     if len(rows) == 0:
         return 400, 'Failed to add the database to the cluster.'
     cluster_id = rows[0]['cluster_id']
-    pdict['cluster_id'] = cluster_id
 
     # insert into clup_used_vip
     insert_sql = "INSERT INTO clup_used_vip(pool_id, vip, cluster_id, used_reason) VALUES(%s, %s, %s, 2) RETURNING vip"
@@ -1699,15 +1716,12 @@ def create_polar_sd_cluster(req):
         return 400, f"Excute sql({insert_sql}) failed."
 
     # 开启线程后台创建数据库
-    task_name = f"create_sr_cluster(cluster_id={pdict['cluster_id']})"
-    task_id = general_task_mgr.create_task('create_sr_cluster', task_name, {'cluster_id': pdict['cluster_id']})
-
-    general_task_mgr.run_task(task_id, long_term_task.task_create_polar_sd_cluster, (cluster_id, pdict))
+    task_name = f"create_sr_cluster(cluster_id={cluster_id})"
+    task_id = general_task_mgr.create_task('create_sr_cluster', task_name, {'cluster_id': cluster_id})
+    general_task_mgr.run_task(task_id, long_term_task.task_create_polar_sd_cluster, (cluster_id, master_node_info, reader_node_info_list, pfs_info))
 
     ret_data = {"task_id": task_id, "task_name": task_name}
-    raw_data = json.dumps(ret_data)
-
-    return 200, raw_data
+    return 200, json.dumps(ret_data)
 
 
 # 修改polardb共享存储集群信息

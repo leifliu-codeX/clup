@@ -27,37 +27,37 @@ import os
 import time
 import traceback
 
+import cluster_state
 import dao
 import dbapi
-import pg_utils
-import pg_db_lib
-import rpc_utils
-import cluster_state
 import general_task_mgr
+import pg_db_lib
+import pg_utils
+import rpc_utils
 
 
 class PolarCommon:
-    def __init__(self, rpc, **kwargs):
+    def __init__(self, rpc, node_info, pfs_info=None):
         self.rpc = rpc
-        self.os_user = kwargs["os_user"]
-        self.db_user = kwargs["db_user"]
-        self.pg_bin_path = kwargs["pg_bin_path"]
-        self.pgdata = kwargs["pgdata"]
-        self.port = kwargs["port"]
-        # os_user kwargs
-        self.rpc_dict = kwargs["rpc_dict"]
+        if pfs_info:
+            self.pfs_info = pfs_info
+        self.node_info = node_info
+        self.port = node_info["port"]
+        self.pgdata = node_info["pgdata"]
+        self.os_user = node_info["os_user"]
+        self.db_user = node_info["db_user"]
+        self.pg_bin_path = node_info["pg_bin_path"]
 
     # 创建os_user
     def create_os_user(self):
-        if 'os_uid' not in self.rpc_dict:
-            if self.rpc_dict['os_user'] == 'halo':
+        if 'os_uid' not in self.node_info:
+            if self.os_user == 'halo':
                 os_uid = 1000
             else:
                 os_uid = 701
         else:
-            os_uid = self.rpc_dict['os_uid']
-        os_user = self.rpc_dict['os_user']
-        err_code, err_msg = pg_db_lib.pg_init_os_user(self.rpc, os_user, os_uid)
+            os_uid = self.node_info['os_uid']
+        err_code, err_msg = pg_db_lib.pg_init_os_user(self.rpc, self.node_info["os_user"], os_uid)
         return err_code, err_msg
 
     # 设置环境变量
@@ -86,39 +86,35 @@ class PolarCommon:
         return err_code, err_msg
 
     # 执行polar-initdb
-    def polar_initdb(self):
-        pfs_disk_name = self.rpc_dict["pfs_disk_name"]
-        polar_datadir = self.rpc_dict["polar_datadir"]
-        cmd = f'{self.pg_bin_path}/polar-initdb.sh {self.pgdata}/ /{pfs_disk_name}/{polar_datadir}/'
+    def polar_initdb(self, polar_version=11):
+        """执行polar-initdb
+        """
+        pfs_disk_name = self.pfs_info["pfs_disk_name"]
+        polar_datadir = self.pfs_info["polar_datadir"]
+        cmd = f"{self.pg_bin_path}/polar-initdb.sh {self.pgdata}/ /{pfs_disk_name}/{polar_datadir}/"
+        # polardb15 的polar-initdb.sh要求携带primary|replica
+        if polar_version > 11:
+            cmd = f"{cmd} primary"
         err_code, err_msg, _out_msg = self.rpc.run_cmd_result(cmd)
         return err_code, err_msg
 
     # 修改postgresql.conf配置文件
-    def edit_postgresql_conf(self):
-        setting_dict = self.rpc_dict['setting_dict']
-        pfs_disk_name = self.rpc_dict["pfs_disk_name"]
-        polar_datadir = self.rpc_dict["polar_datadir"]
-        # 获得数据库的版本
-        str_pg_ver = self.rpc_dict['version']
-        cells = str_pg_ver.split('.')
-        pg_main_ver = int(cells[0])
+    def edit_postgresql_conf(self, setting_dict):
+        pfs_disk_name = self.pfs_info["pfs_disk_name"]
+        polar_datadir = self.pfs_info["polar_datadir"]
         # 当打开归档后,wal_level不能是minimal
         if 'archive_mode' in setting_dict:
             if setting_dict.get('archive_mode') == 'on':
                 if 'wal_level' in setting_dict:
                     if setting_dict['wal_level'] == 'minimal':
                         setting_dict['wal_level'] = 'replica'
-                else:
-                    # 10版本及以上,wal_level默认已经时replica,不需要设置
-                    if pg_main_ver <= 9:
-                        setting_dict['wal_level'] = 'replica'
 
         try:
-            setting_dict["polar_hostid"] = self.rpc_dict["polar_hostid"]
-            setting_dict["polar_disk_name"] = pfs_disk_name
-            setting_dict["polar_datadir"] = f"/{pfs_disk_name}/{polar_datadir}/"
+            setting_dict["polar_hostid"] = self.node_info["polar_hostid"]
             setting_dict['polar_vfs.localfs_mode'] = "off"
             setting_dict['polar_enable_shared_storage_mode'] = "on"
+            setting_dict["polar_disk_name"] = pfs_disk_name
+            setting_dict["polar_datadir"] = f"/{pfs_disk_name}/{polar_datadir}/"
             setting_dict['polar_storage_cluster_name'] = setting_dict.get("polar_storage_cluster_name", "disk")
 
             postgresql_conf = f'{self.pgdata}/postgresql.conf'
@@ -140,8 +136,8 @@ class PolarCommon:
                     args = f"{key} = '{value}'\n"
                 content = content + args
             # 在配置文件尾部追加参数
-            offset = self.rpc.get_file_size(postgresql_conf)
-            self.rpc.os_write_file(postgresql_conf, offset, content.encode())
+            # offset = self.rpc.get_file_size(postgresql_conf)
+            self.rpc.append_file(postgresql_conf, content)
         except Exception as e:
             err_code = -1
             err_msg = str(e)
@@ -149,12 +145,14 @@ class PolarCommon:
         return 0, 'Successfully modified the postgresql.conf file.'
 
     # 修改pg_hba.conf身份认证
-    def edit_hba_conf(self):
+    def edit_hba_conf(self, polar_type):
         hba_file = f'{self.pgdata}/pg_hba.conf'
-        content = """\nhost replication all all md5\nhost all all all md5"""
-        err_code, err_msg = self.rpc.append_file(hba_file, content)
-        if err_code != 0:
-            return err_code, err_msg
+        # reader节点的话这里无需添加下面这行，在copy_conf_to_reader这步已经从主库上获取并写入过了
+        if polar_type == "master":
+            content = """\nhost replication all all md5\nhost all all all md5"""
+            err_code, err_msg = self.rpc.append_file(hba_file, content)
+            if err_code != 0:
+                return err_code, err_msg
 
         # # 如果数据库用户名不等于操作系统用户名,需要在pg_hba.conf加本地的用户映射以便于本地不需要密码旧可以登录
         if self.os_user != self.db_user:
@@ -167,11 +165,11 @@ class PolarCommon:
             content = f"{self.db_user}\t{self.os_user}\t{self.db_user}"
             tag_line = '# ====== Add by clup map os user'
             self.rpc.config_file_set_tag_content(pg_ident_conf_file, tag_line, content)
+
         return 0, 'Successfully configured pg_hba.conf.'
 
     # 添加插件
-    def create_extension(self):
-        setting_dict = self.rpc_dict["setting_dict"]
+    def create_extension(self, setting_dict):
         plug_str = setting_dict.get('shared_preload_libraries', "'pg_stat_statements'")
         plug_list = plug_str.replace("'", '').split(',')
         err_code = err_msg = ''
@@ -187,16 +185,16 @@ class PolarCommon:
 
     # 启动pfsdaemon
     def start_pfsdaemon(self):
-        pfsdaemon_params = self.rpc_dict["pfsdaemon_params"]
-        pfs_disk_name = self.rpc_dict["pfs_disk_name"]
+        pfs_disk_name = self.pfs_info["pfs_disk_name"]
+        pfsdaemon_params = self.pfs_info["pfsdaemon_params"]
         cmd_start_pfsdaemon = f'/usr/local/polarstore/pfsd/bin/start_pfsd.sh -p {pfs_disk_name} {pfsdaemon_params}'
         err_code = self.rpc.run_cmd(cmd_start_pfsdaemon)
         return err_code, ''
 
     # 创建pfs共享文件夹
     def mk_share_dir(self):
-        pfs_disk_name = self.rpc_dict["pfs_disk_name"]
-        polar_datadir = self.rpc_dict["polar_datadir"]
+        pfs_disk_name = self.pfs_info["pfs_disk_name"]
+        polar_datadir = self.pfs_info["polar_datadir"]
         cmd_mkdir = f'pfs -C disk mkdir /{pfs_disk_name}/{polar_datadir}'
         err_code, err_msg, _out_msg = self.rpc.run_cmd_result(cmd_mkdir)
         if err_code != 0:
@@ -206,12 +204,12 @@ class PolarCommon:
         return err_code, err_msg
 
     # 执行pg_basebackup
-    def polar_basebackup(self, task_id, msg_prefix):
-        repl_user = self.rpc_dict['repl_user']
-        up_db_port = self.rpc_dict["up_db_port"]
-        up_db_repl_ip = self.rpc_dict["up_db_repl_ip"]
+    def polar_basebackup(self, task_id, msg_prefix, up_db_info):
+        up_db_port = up_db_info["port"]
+        repl_user = up_db_info['repl_user']
+        up_db_repl_ip = up_db_info["repl_ip"]
 
-        other_param = self.rpc_dict.get('other_param')
+        other_param = self.node_info.get('other_param')
         other_param = ' -P -Xs ' if not other_param else other_param
 
         param = f'polar_basebackup -h{up_db_repl_ip} -p{up_db_port} -U{repl_user} -D {self.pgdata} {other_param}'
@@ -343,8 +341,8 @@ def stop_pfs(host, db_id=None, pfs_dict=None):
 
 
 def get_up_db_info(up_db_id):
-    sql = "SELECT db_id, up_db_id, state, host, cluster_id, port, pgdata," \
-        " db_type, repl_app_name, repl_ip, db_detail->>'delay' as delay," \
+    sql = "SELECT db_id, up_db_id, state, host, cluster_id, port, pgdata, db_type, repl_app_name, repl_ip," \
+        " db_detail->'wal_segsize' as wal_segsize, db_detail->>'delay' as delay," \
         " db_detail->>'db_user' as db_user, db_detail->>'db_pass' as db_pass," \
         " db_detail->>'os_user' as os_user, db_detail->>'instance_type' as instance_type,"\
         " db_detail->'repl_ip' as repl_ip_in_detail, db_detail->'repl_user' as repl_user, "\
@@ -357,7 +355,7 @@ def get_up_db_info(up_db_id):
     return rows[0]
 
 
-def init_polar_reader(rpc, rpc_dict):
+def init_polar_reader_old(rpc, pgdata, up_db_host, up_db_pgdata, polar_version=11):
     """简化版搭建RO节点
     """
     try:
@@ -370,7 +368,6 @@ def init_polar_reader(rpc, rpc_dict):
             'pg_tblspc', 'pg_twophase', 'polar_cache_trash', 'polar_fullpage', 'polar_rel_size_cache'
         ]
         # 创建目录
-        pgdata = rpc_dict['pgdata']
         dirs = " ".join(dirs_list)
         cmd = f"cd {pgdata} && mkdir {dirs}"
         err_code, err_msg, out_msg = rpc.run_cmd_result(cmd)
@@ -394,8 +391,6 @@ def init_polar_reader(rpc, rpc_dict):
             return -1, f"chmod dirs error: {err_msg}, {out_msg}"
 
         # 获取主库的postgresql.conf文件内容
-        up_db_host = rpc_dict['up_db_host']
-        up_db_pgdata = rpc_dict['up_db_pgdata']
         err_code, err_msg = rpc_utils.get_rpc_connect(up_db_host)
         if err_code != 0:
             return -1, f"Failed to get the configuration file of the master node:{err_msg}"
@@ -437,8 +432,8 @@ def init_polar_reader(rpc, rpc_dict):
             return -1, err_msg
 
         # 创建一个PG_VERSION
-        pg_version = f"{pgdata}/PG_VERSION"
-        err_code, err_msg = rpc.os_write_file(pg_version, 0, b"11")
+        pg_version_file = f"{pgdata}/PG_VERSION"
+        err_code, err_msg = rpc.os_write_file(pg_version_file, 0, str(polar_version).encode())
         if err_code != 0:
             return -1, err_msg
 
@@ -461,7 +456,7 @@ def init_polar_reader(rpc, rpc_dict):
             return -1, err_msg
 
         # 修改文件属主及权限
-        files = f"{reader_postgresql_conf} {reader_pg_hba_conf} {pg_version} " \
+        files = f"{reader_postgresql_conf} {reader_pg_hba_conf} {pg_version_file} " \
                 f"{reader_pg_ident_conf} {reader_pg_auto_conf} {reader_polar_dma_conf}"
         chown_cmd = f"cd {pgdata} && chown -R {st_dict['st_uid']}:{st_dict['st_gid']} {files}"
         err_code, err_msg, out_msg = rpc.run_cmd_result(chown_cmd)
@@ -480,16 +475,58 @@ def init_polar_reader(rpc, rpc_dict):
             master_rpc.close()
 
 
-def edit_reader_postgresql_conf(rpc, rpc_dict):
+def copy_conf_to_reader(rpc, pgdata, up_db_host, up_db_pgdata):
+    """配置reader节点
+    """
+    try:
+        master_rpc = None
+        # connect the updb host
+        code, result = rpc_utils.get_rpc_connect(up_db_host)
+        if code != 0:
+            return -1, f"Failed to get the configuration file of the master node: {result}."
+        master_rpc = result
+
+        # 获取上级库的文件内容
+        file_list = ["postgresql.auto.conf", "postgresql.conf", "pg_hba.conf", "pg_ident.conf"]
+        for file in file_list:
+            source_file = f"{up_db_pgdata}/{file}"
+            if not master_rpc.os_path_exists(source_file):
+                continue
+
+            code, result = master_rpc.file_read(source_file)
+            if code != 0:
+                return -1, f"Failed to get the file({up_db_pgdata}) contents from the superior database({up_db_host}): {result}."
+            file_content = result
+
+            # 创建一个空文件
+            # err_code, err_msg = rpc.os_write_file(target_file, 0, b"")
+            # if err_code != 0:
+            #     return -1, err_msg
+
+            # 写入配置信息
+            target_file = f"{pgdata}/{file}"
+            code, result = rpc.file_write(target_file, file_content, mode='w')
+            if code != 0:
+                return -1, f"Write the content to file({target_file}) failed, {result}."
+
+        return 0, ''
+    except Exception as e:
+        return -1, f"Configuration of 'reader' node directory and configuration file failed:{str(e)}"
+    finally:
+        if master_rpc:
+            master_rpc.close()
+
+
+def edit_reader_postgresql_conf(rpc, node_info):
     """配置只读节点的postgresql.conf
     """
-    pgdata = rpc_dict["pgdata"]
-    postgresql_conf = f'{pgdata}/postgresql.conf'
-    reader_setting_dict = {}
+    postgresql_conf = f"{node_info['pgdata']}/postgresql.conf"
+
     try:
-        reader_setting_dict['port'] = rpc_dict["port"]
-        reader_setting_dict['polar_hostid'] = rpc_dict["polar_hostid"]
-        reader_setting_dict['synchronous_standby_names'] = f"""'replica{rpc_dict["polar_hostid"]}'"""
+        reader_setting_dict = {}
+        reader_setting_dict['port'] = node_info["port"]
+        reader_setting_dict['polar_hostid'] = node_info["polar_hostid"]
+        reader_setting_dict['synchronous_standby_names'] = f"""'replica{node_info["db_id"]}'"""
 
         setting_list = [setting for setting in reader_setting_dict.keys()]
         err_code, err_msg = rpc.read_config_file_items(postgresql_conf, setting_list)
@@ -507,19 +544,19 @@ def edit_reader_postgresql_conf(rpc, rpc_dict):
     return 0, "Successfully modified 'postgresql.conf' file"
 
 
-def edit_standby_postgresql_conf(rpc, rpc_dict):
+def edit_standby_postgresql_conf(rpc, node_info):
     """配置备库的postgresql.conf
     """
-    pgdata = rpc_dict["pgdata"]
+    pgdata = node_info["pgdata"]
 
     try:
         polar_datadir = f"{pgdata}/polar_shared_data"
         standby_setting_dict = {
-            "port": rpc_dict["port"],
-            "polar_hostid": rpc_dict["polar_hostid"],
+            "port": node_info["port"],
+            "polar_hostid": node_info["polar_hostid"],
             "polar_vfs.localfs_mode": 'true',
             "polar_datadir": f"'file-dio://{polar_datadir}'",
-            "synchronous_standby_names": f"""'standby{ rpc_dict["polar_hostid"] }'"""
+            "synchronous_standby_names": f"""'standby{ node_info["db_id"] }'"""
         }
         postgresql_conf = f'{pgdata}/postgresql.conf'
         setting_list = [setting for setting in standby_setting_dict.keys()]
@@ -537,80 +574,116 @@ def edit_standby_postgresql_conf(rpc, rpc_dict):
     return 0, "Successfully modified postgresql.conf file."
 
 
-def edit_standby_conf(rpc, pgdata, repl_app_name, repl_user, up_db_repl_ip, up_db_port, polar_hostid):
+def edit_standby_conf(rpc, db_id, pgdata, repl_app_name, repl_user, up_db_repl_ip, up_db_port, polar_version=11):
     """创建standby节点recovery.conf
     """
-    recovery_file = f'{pgdata}/recovery.conf'
-    # recovery_done_file = f"{pgdata}/recovery.done"
-    primary_conninfo = f"user={repl_user} host={up_db_repl_ip} port={up_db_port} sslmode=prefer " \
+    primary_slot_name = f"standby{db_id}"
+    primary_conninfo = (f"user={repl_user} host={up_db_repl_ip} port={up_db_port} sslmode=prefer "
         f"sslcompression=0 application_name={repl_app_name}"
+    )
+    content = f"recovery_target_timeline='latest'\nprimary_slot_name='{primary_slot_name}'\nprimary_conninfo='{primary_conninfo}'"
+    if polar_version == 11:
+        content = f"standby_mode='on'\n{content}"
+        target_file = f'{pgdata}/recovery.conf'
+    elif polar_version > 11:
+        target_file = f"{pgdata}/postgresql.conf"
+    else:
+        return -1, f"Invalid polardb version({polar_version})."
+
     try:
-        content = f"standby_mode = 'on'\nrecovery_target_timeline = 'latest'\nprimary_slot_name = 'standby{polar_hostid}'\nprimary_conninfo = '{primary_conninfo}'"
-        err_code, err_msg = rpc.file_write(recovery_file, content)
+        err_code, err_msg = rpc.file_write(target_file, content, mode='a+')
         if err_code != 0:
-            err_msg = f"write file {recovery_file} error: {err_msg}"
+            err_msg = f"write file {target_file} error: {err_msg}"
             return err_code, err_msg
 
-        # 把文件recovery.conf属主改成于postgresql.conf相同
-        example_file = f"{pgdata}/postgresql.conf"
+        # 如果是15及以上的版本，则需要创建standby.signal文件
+        if polar_version > 11:
+            cmd = f"touch {pgdata}/standby.signal"
+            code = rpc.run_cmd(cmd)
+            if code != 0:
+                return -1, f"Run cmd({cmd}) failed."
+            target_file = f"{pgdata}/standby.signal"
+
+        # 获取postgresql.conf文件属主
+        example_file = f"{pgdata}/postgresql.auto.conf"
         err_code, err_msg = rpc.os_stat(example_file)
         if err_code != 0:
             return err_code, err_msg
         st_dict = err_msg
-        err_code, err_msg = rpc.os_chown(recovery_file, st_dict['st_uid'], st_dict['st_gid'])
+
+        # 修改文件属主
+        err_code, err_msg = rpc.os_chown(target_file, st_dict['st_uid'], st_dict['st_gid'])
         if err_code != 0:
-            err_msg = f"chown file {recovery_file} error: {err_msg}"
+            err_msg = f"chown file {target_file} error: {err_msg}"
             return err_code, err_msg
-        err_code, err_msg = rpc.os_chmod(recovery_file, 0o600)
+
+        err_code, err_msg = rpc.os_chmod(target_file, 0o600)
         if err_code != 0:
-            err_msg = f"chmod file {recovery_file} error: {err_msg}"
+            err_msg = f"chmod file {target_file} error: {err_msg}"
             return err_code, err_msg
-    except Exception:
-        return -1, traceback.format_exc()
-    return err_code, err_msg
+    except Exception as e:
+        return -1, f"Write the standby information to file({target_file}) with unexpected error, {str(e)}."
+
+    return 0, err_msg
 
 
-def edit_reader_conf(rpc, pgdata, repl_app_name, repl_user, up_db_repl_ip, up_db_port, polar_hostid):
+def edit_reader_conf(rpc, db_id, pgdata, repl_app_name, repl_user, up_db_repl_ip, up_db_port, polar_version=11):
     """创建reader节点recovery.conf
     """
-    recovery_file = f'{pgdata}/recovery.conf'
-    # recovery_done_file = f"{pgdata}/recovery.done"
-    primary_conninfo = f"user={repl_user} host={up_db_repl_ip} port={up_db_port} sslmode=prefer " \
+    primary_slot_name = f"replica{db_id}"
+    primary_conninfo = (f"user={repl_user} host={up_db_repl_ip} port={up_db_port} sslmode=prefer "
         f"sslcompression=0 application_name={repl_app_name}"
+    )
+    content = f"polar_replica='on'\nrecovery_target_timeline='latest'\nprimary_slot_name='{primary_slot_name}'\nprimary_conninfo='{primary_conninfo}'"
+
     try:
-        content = f"polar_replica = 'on'\nrecovery_target_timeline = 'latest'\nprimary_slot_name = 'replica{polar_hostid}'\nprimary_conninfo = '{primary_conninfo}'"
-        err_code, err_msg = rpc.file_write(recovery_file, content)
+        target_file = f'{pgdata}/recovery.conf'
+        if polar_version > 11:
+            target_file = f"{pgdata}/postgresql.conf"
+
+        err_code, err_msg = rpc.file_write(target_file, content, mode='a+')
         if err_code != 0:
-            err_msg = f"write file {recovery_file} error: {err_msg}"
+            err_msg = f"write file {target_file} error: {err_msg}"
             return err_code, err_msg
 
-        # 把文件recovery.conf属主改成于postgresql.conf相同
-        example_file = f"{pgdata}/postgresql.conf"
+        # 如果是15及以上的版本，则需要创建standby.signal文件
+        if polar_version > 11:
+            cmd = f"touch {pgdata}/standby.signal"
+            code = rpc.run_cmd(cmd)
+            if code != 0:
+                return -1, f"Run cmd({cmd}) failed."
+            target_file = f"{pgdata}/standby.signal"
+
+        # 获取postgresql.conf文件属主
+        example_file = f"{pgdata}/postgresql.auto.conf"
         err_code, err_msg = rpc.os_stat(example_file)
         if err_code != 0:
             return err_code, err_msg
         st_dict = err_msg
-        err_code, err_msg = rpc.os_chown(recovery_file, st_dict['st_uid'], st_dict['st_gid'])
+
+        # 修改文件属主
+        err_code, err_msg = rpc.os_chown(target_file, st_dict['st_uid'], st_dict['st_gid'])
         if err_code != 0:
-            err_msg = f"chown file {recovery_file} error: {err_msg}"
+            err_msg = f"chown file {target_file} error: {err_msg}"
             return err_code, err_msg
-        err_code, err_msg = rpc.os_chmod(recovery_file, 0o600)
+
+        err_code, err_msg = rpc.os_chmod(target_file, 0o600)
         if err_code != 0:
-            err_msg = f"chmod file {recovery_file} error: {err_msg}"
+            err_msg = f"chmod file {target_file} error: {err_msg}"
             return err_code, err_msg
     except Exception:
         return -1, traceback.format_exc()
     return err_code, err_msg
 
 
-def create_replication_slot(rpc_dict, slot_name):
+def create_replication_slot(up_db_info, slot_name):
     """在主库中创建复制槽
     """
     db_name = 'template1'
-    db_user = rpc_dict["db_user"]
-    port = rpc_dict["up_db_port"]
-    os_user = rpc_dict["up_db_os_user"]
-    up_db_host = rpc_dict["up_db_host"]
+    port = up_db_info["port"]
+    up_db_host = up_db_info["host"]
+    db_user = up_db_info["db_user"]
+    os_user = up_db_info["os_user"]
     try:
         rpc = None
         err_code, err_msg = rpc_utils.get_rpc_connect(up_db_host)
@@ -744,37 +817,41 @@ def update_recovery(db_id, new_primary_host, new_primary_port, new_primary_pgdat
     return 0, "Configuration of recovery.conf completed."
 
 
-def delete_polar_datadir(rpc, pdict):
+def delete_polar_datadir(rpc, db_id):
     """删除共享文件夹
 
     Returns: 如果不能成功删除返回提示消息,让用户手动删除
     """
-    db_id = pdict["db_id"]
-    sql = "SELECT is_primary, db_detail->'pfs_disk_name' as pfs_disk_name,db_detail->'polar_datadir' \
-                as polar_datadir, db_detail->'polar_type' as polar_type FROM clup_db WHERE db_id = %(db_id)s "
-    rows = dbapi.query(sql, pdict)
-    err_msg = ""
-    if not len(rows):
-        err_msg = f"The information related to the database(db_id = {pdict['db_id']}) is not found, so it cannot be determined whether to delete the pfs shared folder."
+    sql = """SELECT is_primary,
+    db_detail->'polar_type' as polar_type,
+    db_detail->'pfs_disk_name' as pfs_disk_name,
+    db_detail->'polar_datadir'as polar_datadir FROM clup_db WHERE db_id=%(db_id)s
+    """
+    rows = dbapi.query(sql, (db_id, ))
+    if not rows:
+        err_msg = f"The information related to the database(db_id={db_id}) is not found, so it cannot be determined whether to delete the pfs shared folder."
         return -1, err_msg
+    primary_db_info = rows[0]
+
     try:
-        is_primary = rows[0]["is_primary"]
-        polar_type = rows[0].get("polar_type", None)
+        is_primary = primary_db_info["is_primary"]
+        polar_type = primary_db_info.get("polar_type", None)
         if polar_type == 'master' and is_primary:
-            pfs_disk_name = rows[0].get("pfs_disk_name")
-            polar_datadir = rows[0]["polar_datadir"]
+            polar_datadir = primary_db_info["polar_datadir"]
+            pfs_disk_name = primary_db_info.get("pfs_disk_name")
             if not polar_datadir:
                 err_msg = f"The 'polar_datadir' information was not found in the 'db_detail' of the database(db_id={db_id}). Please manually delete the pfs shared folder."
                 return -1, err_msg
             cmd_deletedir = f'pfs -C disk rm -r /{pfs_disk_name}/{polar_datadir}/'
-            err_code = rpc.run_cmd(cmd_deletedir)
-            if err_code != 0:
-                if err_code == 255:
-                    err_msg = f"The '/{pfs_disk_name}/{polar_datadir}' folder has been deleted！"
+            code = rpc.run_cmd(cmd_deletedir)
+            if code != 0:
+                if code == 255:
+                    err_msg = f"The '/{pfs_disk_name}/{polar_datadir}' folder has been deleted!"
                     return 0, err_msg
                 return -1, f"An unknown error occurred while executing the '{cmd_deletedir}' command. Please manually delete the pfs shared folder!"
     except Exception:
-        return -1, traceback.format_exc()
+        return -1, f"Delete the polar shared directory with unexpected error, {traceback.format_exc()}."
+
     return 0, err_msg
 
 
@@ -904,60 +981,73 @@ def check_and_offline_cluster(db_id):
     return 0, f"Offline cluster_id={cluster_id} is successed"
 
 
-def delete_polar_replica(db_dict):
+def delete_polar_replica(db_id):
     """检查并删除主库中的复制槽
     """
-    cluster_id = db_dict['cluster_id']
-    host = db_dict['host']
-    pgdata = db_dict['pgdata']
-    operation = f"Delete replication slot of the database(db_id={db_dict['db_id']}) on the primary database: "
+
+    operation = f"Delete replication slot of the database(db_id={db_id}) on the primary database"
+
+    # get the instance info
+    sql = "SELECT cluster_id, host, port, pgdata, db_detail->'version' as version FROM clup_db WHERE db_id=%s"
+    rows = dbapi.query(sql, (db_id, ))
+    if not rows:
+        return -1, f"{operation}: Cant find any records for the instance(db_id={db_id})."
+    node_info = dict(rows[0])
+
+    # test connect the host
+    code, result = rpc_utils.get_rpc_connect(node_info["host"])
+    if code != 0:
+        return -1, f"{operation}: Connect the host({node_info['host']}) failed, {result}."
+    rpc = result
+
     try:
-        rpc = None
-        err_code, err_msg = rpc_utils.get_rpc_connect(host)
-        if err_code != 0:
-            err_msg = f"Connect to host({host}) failed"
-            return err_code, operation + err_msg
-        rpc = err_msg
+        # get the primary_slot_name from the instance configure file
+        target_file = f"{node_info['pgdata']}/recovery.conf"
+        polar_version = int(node_info["version"].split(".")[0])
+        if polar_version > 11:
+            target_file = f"{node_info['pgdata']}/postgresql.conf"
 
-        recovery_file = f"{pgdata}/recovery.conf"
-        err_code, err_msg = rpc.read_config_file_items(recovery_file, ['primary_slot_name'])
-        if err_code != 0:
-            return err_code, operation + err_msg
+        code, result = rpc.read_config_file_items(target_file, ['primary_slot_name'])
+        if code != 0:
+            return -1, f"{operation}: Get the setting(primary_slot_name) failed, {result}."
         # 此处返回的是"'aa'"形式,所以后面sql中不需要再加‘’
-        slot_name = err_msg.get('primary_slot_name')
-        rpc.close()
-        rpc = None
+        slot_name = result.get('primary_slot_name')
+        # polardb15的话需要再检查postgresql.auto.conf文件
+        if polar_version > 11 or not slot_name:
+            target_file = f"{node_info['pgdata']}/postgresql.auto.conf"
+            if rpc.os_path_exists(target_file):
+                code, result = rpc.read_config_file_items(target_file, ['primary_slot_name'])
+                if code != 0:
+                    return -1, f"{operation}: Get the setting(primary_slot_name) failed, {result}."
+                slot_name = result.get('primary_slot_name', slot_name)
         if not slot_name:
-            return 0, "slot_name not found"
-        result = dao.get_primary_host(cluster_id)
-        if result.get('host', None):
-            primary_host = result['host']
-            err_code, err_msg = rpc_utils.get_rpc_connect(primary_host)
-            if err_code != 0:
-                err_msg = f"Failed to connect to the machine(host={primary_host}) where the primary database is located, " \
-                    "unable to delete the replication slot({slot_name}). Please delete it manually."
-                return err_code, err_msg
-            rpc = err_msg
-            os_user = db_dict['os_user']
-            db_user = db_dict['db_user']
-            port = db_dict['port']
-            db_name = 'postgres'
-            sql = f"select pg_drop_replication_slot({slot_name});"
-            cmd = f"""su - {os_user} -c "psql  -U {db_user} -p {port} -d {db_name}  -c \\"{sql}\\" " """
+            return 1, f"{operation}: The instance is no set primary_slot_name."
 
-            err_code, err_msg, _out_msg = rpc.run_cmd_result(cmd)
-            if err_code != 0:
-                return -1, f"Error occurred while deleting replication slot({slot_name}) on the machine(host={primary_host})" \
-                    "where the primary database is located. Please manually delete it."
-        return 0, "The replication slot in the primary database has been deleted."
+        # get the primary info
+        primary_info = dao.get_cluster_primary(node_info['cluster_id'])
+        if not primary_info:
+            return -1, f"{operation}: Not find the primary node information for the cluster(cluster_id={node_info['cluster_id']})."
+        # primary_info is a list
+        primary_conn_info = dao.get_db_conn_info(primary_info[0]['db_id'])
+        if not primary_conn_info:
+            return -1, f"{operation}: Get the instance database connect information failed."
+        db_conn = dao.get_db_conn(primary_conn_info)
+        if not db_conn:
+            return -1, f"{operation}: Connect the primary node(host={primary_conn_info['host']},port={primary_conn_info['port']}) failed."
+
+        sql = f"select pg_drop_replication_slot({slot_name});"
+        dbapi.conn_execute(db_conn, sql)
+
     except Exception:
-        return -1, traceback.format_exc()
+        return -1, f"{operation} with unexpected error, {traceback.format_exc()}."
     finally:
         if rpc:
             rpc.close()
 
+    return 0, "The replication slot in the primary database has been deleted."
 
-def is_exists_recovery(host, pgdata):
+
+def is_exists_recovery(host, pgdata, polar_version):
     """检查poalrdb节点是否有recovery.conf文件
     """
     try:
@@ -968,9 +1058,15 @@ def is_exists_recovery(host, pgdata):
             err_msg = f"Connect to host({host}) failed"
             return err_code, err_msg
         rpc = err_msg
-        is_exists = rpc.os_path_exists(f'{pgdata}/recovery.conf')
+
+        check_file = f'{pgdata}/recovery.conf'
+        if polar_version > 11:
+            check_file = f"{pgdata}/standby.signal"
+
+        is_exists = rpc.os_path_exists(check_file)
         if not is_exists:
             return -1, f"The file 'recovery.conf' does not exist in the '{pgdata}' directory on the host(host={host})."
+
     except Exception:
         return -1, traceback.format_exc()
     finally:
@@ -1003,18 +1099,14 @@ def check_or_create_recovery_conf(db_id, up_db_dict):
             repl_user = db_dict['repl_user']
             up_db_repl_ip = up_db_dict['repl_ip']
             up_db_port = up_db_dict['port']
-            err_code, err_msg = search_polar_hostid(rpc, pgdata)
-            if err_code != 0:
-                return -1, f"Error reading 'polar_hostid' in postgresql.conf file:{err_msg}"
 
-            polar_hostid = err_msg
             polar_type = db_dict['polar_type']
             if polar_type == 'reader':
-                err_code, err_msg = edit_reader_conf(rpc, pgdata, repl_app_name, repl_user, up_db_repl_ip, up_db_port, polar_hostid)
+                err_code, err_msg = edit_reader_conf(rpc, db_id, pgdata, repl_app_name, repl_user, up_db_repl_ip, up_db_port)
                 if err_code != 0:
                     return -1, err_msg
             elif polar_type == 'standby':
-                err_code, err_msg = edit_standby_conf(rpc, pgdata, repl_app_name, repl_user, up_db_repl_ip, up_db_port, polar_hostid)
+                err_code, err_msg = edit_standby_conf(rpc, db_id, pgdata, repl_app_name, repl_user, up_db_repl_ip, up_db_port)
                 if err_code != 0:
                     return -1, err_msg
             return 1, 'create new recovery.conf'
@@ -1511,3 +1603,22 @@ def pfs_growfs(db_info, pfs_disk_name, current_chunks, target_chunks):
             rpc.close()
 
     return 0, "Growfs success"
+
+
+def get_polar_major_version(db_id):
+    """获取PolarDB的主版本号
+
+    Args:
+        db_id (_type_): _description_
+    """
+    sql = "SELECT db_detail->'version' as version FROM clup_db WHERE db_id=%s"
+    rows = dbapi.query(sql, (db_id, ))
+    if not rows:
+        return -1, f"Cant find any records for the instance(db_id={db_id})."
+
+    version = rows[0]["version"]
+    if not version:
+        return -1, f"Get the version for the instance(db_id={db_id}) failed."
+
+    major_version = int(version.split(".")[0])
+    return 0, major_version

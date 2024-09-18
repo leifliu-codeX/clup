@@ -27,11 +27,11 @@ import json
 import logging
 import traceback
 
-import dao
-import db_type_def
-import database_state
 import cluster_state
+import dao
+import database_state
 import db_encrypt
+import db_type_def
 import dbapi
 import general_task_mgr
 import long_term_task
@@ -164,42 +164,52 @@ def build_polar_standby(pdict, polar_type):
 
     step = "Create build database task"
     try:
-        # rpc_dict 放下创建备库的调用的参数
-        rpc_dict = db_dict
-        # 数据库用户，当db_user禹os_user不相同是，需要在pg_hba.conf中加用户映射，否则本地无法误密码的登录数据库
-        rpc_dict['db_user'] = up_db_dict['db_user']
-        rpc_dict['db_pass'] = up_db_dict['db_pass']
-        rpc_dict['up_db_id'] = up_db_dict['db_id']
-        rpc_dict['up_db_host'] = up_db_dict['host']
-        rpc_dict['up_db_port'] = up_db_dict['port']
-        rpc_dict["up_db_os_user"] = up_db_dict["os_user"]
-        rpc_dict['up_db_pgdata'] = up_db_dict['pgdata']
-        rpc_dict['repl_pass'] = up_db_dict['repl_pass']
-        rpc_dict["up_db_repl_ip"] = up_db_dict["repl_ip"]
-        rpc_dict["other_param"] = db_dict["other_param"]
+        pfs_info = {
+            "pfs_disk_name": up_db_dict["pfs_disk_name"],
+            "polar_datadir": up_db_dict["polar_datadir"],
+            "pfsdaemon_params": up_db_dict["pfsdaemon_params"]
+        }
 
-        rpc_dict["polar_hostid"] = polar_hostid
-        rpc_dict['primary_slot_name'] = f"replica{polar_hostid}"
-        rpc_dict['pfs_disk_name'] = up_db_dict["pfs_disk_name"]
-        rpc_dict["polar_datadir"] = up_db_dict["polar_datadir"]
-        rpc_dict['pfsdaemon_params'] = up_db_dict["pfsdaemon_params"]
+        # 数据库用户，当db_user禹os_user不相同是，需要在pg_hba.conf中加用户映射，否则本地无法误密码的登录数据库
+        node_info = db_dict
+        node_info["polar_hostid"] = polar_hostid
+        node_info["port"] = up_db_dict["port"]
+        node_info['db_user'] = up_db_dict['db_user']
+        node_info['db_pass'] = up_db_dict['db_pass']
+        node_info["primary_slot_name"] = f"replica{db_dict['db_id']}"
+
+        # rpc_dict 放下创建备库的调用的参数
+        # rpc_dict = db_dict
+        # rpc_dict['up_db_id'] = up_db_dict['db_id']
+        # rpc_dict['up_db_host'] = up_db_dict['host']
+        # rpc_dict['up_db_port'] = up_db_dict['port']
+        # rpc_dict["up_db_os_user"] = up_db_dict["os_user"]
+        # rpc_dict['up_db_pgdata'] = up_db_dict['pgdata']
+        # rpc_dict["up_db_repl_ip"] = up_db_dict["repl_ip"]
+
+        # rpc_dict['primary_slot_name'] = f"replica{polar_hostid}"
+
+        # rpc_dict['pfs_disk_name'] = up_db_dict["pfs_disk_name"]
+        # rpc_dict["polar_datadir"] = up_db_dict["polar_datadir"]
+        # rpc_dict['pfsdaemon_params'] = up_db_dict["pfsdaemon_params"]
 
         # 开始搭建只读节点
         task_name = f"build polardb(db={db_dict['host']}:{db_dict['port']})"
-        rpc_dict['task_name'] = task_name
+        # rpc_dict['task_name'] = task_name
         # rpc_dict['task_key'] = task_name + str(db_dict['db_id'])
 
         task_id = general_task_mgr.create_task(
             task_type=task_type_def.PG_BUILD_STANDBY_TASK,
             task_name=task_name,
-            task_data=rpc_dict
+            task_data=node_info
         )
-        rpc_dict['task_id'] = task_id
+        # rpc_dict['task_id'] = task_id
         # rpc_dict['pre_msg'] = f"Build reader(db_id={db_dict['db_id']})"
         if polar_type == "reader":
-            general_task_mgr.run_task(task_id, long_term_task.task_build_polar_reader, (rpc_dict, ))
+            # 开始搭建备库,repl_user|pass、settings_list、wal_segsize都在master_node_info中
+            general_task_mgr.run_task(task_id, long_term_task.task_build_polar_reader, (node_info, up_db_dict, pfs_info))
         elif polar_type == "standby":
-            general_task_mgr.run_task(task_id, long_term_task.task_build_polar_standby, (rpc_dict, ))
+            general_task_mgr.run_task(task_id, long_term_task.task_build_polar_standby, (node_info, up_db_dict))
 
         return 0, task_id
     except Exception:
@@ -377,39 +387,33 @@ def recovery_standby(task_id, msg_prefix, recovery_host, pgdata):
             rpc.close()
 
 
-def create_polardb_with_pfs(pdict):
+def create_polardb_with_pfs(node_info, pfs_info):
+
     # insert db info into clup_db
     try:
+        node_info["polar_hostid"] = 1
         # db_detail cloumn data
-        db_detail = {
-            "polar_hostid": 1,
-            'polar_type': 'master',
-            'os_user': pdict['os_user'],
-            'os_uid': pdict['os_uid'],
-            'db_user': pdict['db_user'],
-            'db_pass': pdict['db_pass'],
-            'version': pdict['version'],
-            'pg_bin_path': pdict['pg_bin_path'],
-            'wal_segsize': pdict['wal_segsize'],
-            'pfs_disk_name': pdict['pfs_disk_name'],
-            'polar_datadir': pdict["polar_datadir"],
-            'pfsdaemon_params': pdict['pfsdaemon_params']
-        }
+        db_detail = node_info.copy()
+        db_detail.update(pfs_info)
+        del db_detail["db_type"]
+        del db_detail["setting_list"]
+        del db_detail["instance_name"]
+        db_detail["polar_type"] = "master"
 
         # db info
         db_info = {
             "polar_hostid": 1,
             "is_primary": 1,
-            "scores": pdict.get("scores", 0),
-            "host": pdict["host"],
-            "port": pdict["port"],
-            "pgdata": pdict["pgdata"],
+            "host": node_info["host"],
+            "port": node_info["port"],
+            "pgdata": node_info["pgdata"],
             "state": cluster_state.NORMAL,
+            "db_type": db_type_def.POLARDB,
+            "scores": node_info.get("scores", 0),
             "db_state": database_state.CREATING,
             "db_detail": json.dumps(db_detail),
-            "repl_ip": pdict.get("repl_ip", pdict["host"]),
-            "repl_app_name": pdict['host'],
-            "db_type": db_type_def.POLARDB
+            "repl_app_name": node_info['host'],
+            "repl_ip": node_info.get("repl_ip", node_info["host"])
         }
 
         sql = "INSERT INTO clup_db (state, pgdata, is_primary, repl_app_name, host," \
@@ -428,40 +432,23 @@ def create_polardb_with_pfs(pdict):
     try:
         task_name = "create polardb with shared disk"
 
-        rpc_dict = dict()
-        rpc_dict.update(db_info)
-        del rpc_dict['db_detail']
-        rpc_dict['db_id'] = db_id
-        rpc_dict['task_name'] = task_name
-        rpc_dict['instance_name'] = rpc_dict['host']
-        rpc_dict["os_uid"] = pdict["os_uid"]
-        rpc_dict["os_user"] = pdict["os_user"]
-        rpc_dict["db_user"] = pdict["db_user"]
-        rpc_dict["version"] = pdict["version"]
-        rpc_dict["pg_bin_path"] = pdict["pg_bin_path"]
-        rpc_dict["wal_segsize"] = pdict["wal_segsize"]
-        rpc_dict['db_pass'] = db_encrypt.from_db_text(pdict['db_pass'])
-
-        rpc_dict["polar_hostid"] = 1
-        rpc_dict['pfsdaemon_params'] = pdict['pfsdaemon_params']
-        rpc_dict['pfs_disk_name'] = pdict['pfs_disk_name']
-        rpc_dict['polar_datadir'] = pdict['polar_datadir']
-
-        setting_dict = long_term_task.pg_setting_list_to_dict(pdict['setting_list'])
-        setting_dict['port'] = pdict['port']
-        rpc_dict['setting_dict'] = setting_dict
+        node_info['db_id'] = db_id
+        node_info['task_name'] = task_name
+        node_info['instance_name'] = node_info.get("intance_name", "")
 
         task_id = general_task_mgr.create_task(
             task_type=task_type_def.PG_CREATE_INSTANCE_TASK,
             task_name=task_name,
-            task_data=rpc_dict
+            task_data=node_info
         )
-        general_task_mgr.run_task(task_id, long_term_task.task_create_polardb, (rpc_dict, ))
+        node_info['db_pass'] = db_encrypt.from_db_text(node_info['db_pass'])
+        node_info["setting_dict"] = long_term_task.pg_setting_list_to_dict(node_info['setting_list'])
+        general_task_mgr.run_task(task_id, long_term_task.task_create_polardb, (node_info, pfs_info))
     except Exception:
         err_msg = f"Create task for create polardb with unexpected error, {traceback.format_exc()}."
         if task_id:
             general_task_mgr.complete_task(task_id, -1, err_msg)
-        dao.update_db_state(rpc_dict['db_id'], database_state.FAULT)
+        dao.update_db_state(db_id, database_state.FAULT)
         return -1, err_msg
     return 0, task_id
 
