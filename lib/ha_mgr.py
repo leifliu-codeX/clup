@@ -1023,7 +1023,7 @@ def sr_switch(task_id, cluster_id, db_id, primary_db, keep_cascaded=False):
         dao.set_cluster_state(cluster_id, clu_state)
 
 
-def test_polar_can_switch(cluster_id, db_id: int, primary_db):
+def test_polar_can_switch(cluster_id, db_id, old_primary_db_id):
     """
     测试streaming replication集群是否能切换主库
     :cluster_id: 高可用集群的id
@@ -1032,7 +1032,7 @@ def test_polar_can_switch(cluster_id, db_id: int, primary_db):
     :return:
     """
     pre_msg = f"Can be switch to primary(cluster={cluster_id}, dbid={db_id})"
-    clu_db_list = dao.get_db_and_lower_db(primary_db)
+    clu_db_list = dao.get_db_and_lower_db(old_primary_db_id)
     cluster_dict = dao.get_cluster(cluster_id)
     if cluster_dict is None or (not clu_db_list):
         logging.info(f"test_sr_can_switch when cluster({cluster_id}) has been deleted")
@@ -1052,8 +1052,8 @@ def test_polar_can_switch(cluster_id, db_id: int, primary_db):
             break
     else:
         db_id_list = [db['db_id'] for db in clu_db_list]
-        db_id_list.remove(primary_db)
-        err_msg = f"To switch the standby to the primary,the standby({db_id}) must be a direct subordinate of the original primary({primary_db})."
+        db_id_list.remove(old_primary_db_id)
+        err_msg = f"To switch the standby to the primary,the standby({db_id}) must be a direct subordinate of the original primary({old_primary_db_id})."
         err_msg += "If it is not, the cascade relationship should be adjusted first before proceeding with the switch!"
         logging.info(f"{pre_msg}: {err_msg}")
         return 1, err_msg
@@ -1190,6 +1190,18 @@ def polar_switch(task_id, cluster_id, new_pri_db_id, old_pri_db_id):
         dao.set_cluster_db_attr(cluster_id, old_pri_db_dict['db_id'], 'is_primary', 0)
         dao.set_cluster_db_attr(cluster_id, new_pri_db_dict['db_id'], 'is_primary', 1)
 
+        # 更新新主库数据库的polar_type
+        log_info(task_id, f"{pre_msg}: Update the polar_type of the database!")
+        err_code, err_msg = polar_lib.update_polar_type(new_pri_db_dict["db_id"], "master")
+        if err_code != 0:
+            log_info(task_id, f"{pre_msg}: {err_msg},Please manually check and modify later!")
+            return -1, err_msg
+
+        # 更新旧主库数据库的polar_type
+        err_code, err_msg = polar_lib.update_polar_type(old_pri_db_dict["db_id"], "reader")
+        if err_code != 0:
+            log_info(task_id, f"{pre_msg}: {err_msg},Please manually check and modify later!")
+
         # 需要把其它备库指向新的主库
         log_info(task_id, f"{pre_msg}: Redirect all the standby databases to the new primary...")
         for db_dict in clu_db_list:
@@ -1212,14 +1224,25 @@ def polar_switch(task_id, cluster_id, new_pri_db_id, old_pri_db_id):
                     # 更新数据库的集群状态，置为Fault，后续只能通过加回集群修复
                     dao.update_ha_state(db_dict["db_id"], node_state.FAULT)
                     continue
-                # 如果是旧主库，则需要先获取新主库的配置文件recovery.conf
+
+                # 修改复制配置信息
                 log_info(task_id, f"{pre_msg}: Configure the recovery.conf file, current database({db_dict['host']}).")
-                if db_dict["db_id"] == old_pri_db_id:
-                    err_code, err_msg = polar_lib.update_recovery(db_dict["db_id"], new_pri_db_dict["host"], new_pri_db_dict["port"], new_pri_db_dict["pgdata"])
+                if db_dict["db_id"] == new_pri_db_id:
+                    continue
+                elif db_dict["db_id"] == old_pri_db_id:
+                    code, _result = polar_lib.set_recovery_conf(db_dict["db_id"], new_pri_db_id)
+                    if code != 0:
+                        continue
                 else:
-                    err_code, err_msg = polar_lib.update_recovery(db_dict["db_id"], new_pri_db_dict["host"], new_pri_db_dict["port"])
-                if err_code != 0:
-                    return -1, err_msg
+                    code, result = polar_lib.update_primary_conninfo(db_dict["db_id"], new_pri_db_id)
+                    if code != 0:
+                        return -1, f"Update the primary_conninfo failed, {result}."
+                # if db_dict["db_id"] == old_pri_db_id:
+                #     err_code, err_msg = polar_lib.update_recovery(db_dict["db_id"], new_pri_db_id)
+                # else:
+                #     err_code, err_msg = polar_lib.update_recovery(db_dict["db_id"], new_pri_db_dict["host"], new_pri_db_dict["port"])
+                # if err_code != 0:
+                #     return -1, err_msg
 
                 # 将流复制密码写入到.pgpass中
                 os_user = db_dict['os_user']
@@ -1240,18 +1263,6 @@ def polar_switch(task_id, cluster_id, new_pri_db_id, old_pri_db_id):
         dao.update_up_db_id('null', new_pri_db_dict['db_id'], 1)
         log_info(task_id, f"{pre_msg}: All the standby databases have been successfully pointed to the new primary database.")
 
-        # 更新新主库数据库的polar_type
-        log_info(task_id, f"{pre_msg}: Update the polar_type of the database!")
-        err_code, err_msg = polar_lib.update_polar_type(new_pri_db_dict["db_id"], "master")
-        if err_code != 0:
-            log_info(task_id, f"{pre_msg}: {err_msg},Please manually check and modify later!")
-            return -1, err_msg
-
-        # 更新旧主库数据库的polar_type
-        err_code, err_msg = polar_lib.update_polar_type(old_pri_db_dict["db_id"], "reader")
-        if err_code != 0:
-            log_info(task_id, f"{pre_msg}: {err_msg},Please manually check and modify later!")
-
         # 停掉新主库
         log_info(task_id, f"{pre_msg}: Stop the new primary database({new_pri_db_dict['host']})...")
         new_pri_db_dict['wait_time'] = 5
@@ -1261,9 +1272,9 @@ def polar_switch(task_id, cluster_id, new_pri_db_id, old_pri_db_id):
         dao.update_db_state(new_pri_db_dict['db_id'], database_state.STOP)
         log_info(task_id, f"{pre_msg}: current new primary database({new_pri_db_dict['host']}) stopped.")
 
-        # 配置新主库的信息
+        # 移除新主库上的复制配置文件
         log_info(task_id, f'{pre_msg}: rename the new primary database recovery.conf to recovery.done...')
-        err_code, err_msg = polar_lib.mv_recovery(new_pri_db_id)
+        err_code, err_msg = polar_lib.remove_recovery_conf(new_pri_db_id)
         if err_code != 0:
             return -1, err_msg
         log_info(task_id, f'{pre_msg}: rename option is finished.')
@@ -1285,6 +1296,20 @@ def polar_switch(task_id, cluster_id, new_pri_db_id, old_pri_db_id):
                 return -1, err_msg
             dao.update_db_state(db_dict['db_id'], database_state.RUNNING)
             log_info(task_id, f"{pre_msg}: current database({db_dict['host']}) is running.")
+
+        # 删除掉新主库对应的复制槽
+        log_info(task_id, f'{pre_msg}: delete the old slot...')
+        err_code, err_msg = polar_lib.delete_replication_slot(old_pri_db_id, slot_db_id=new_pri_db_id)
+        if err_code != 0:
+            return -1, err_msg
+        log_info(task_id, f'{pre_msg}: delete the slot success.')
+
+        # 为旧主库创建一个新的复制槽
+        log_info(task_id, f'{pre_msg}: create a new slot for old primary...')
+        err_code, err_msg = polar_lib.create_replication_slot(old_pri_db_id)
+        if err_code != 0:
+            return -1, err_msg
+        log_info(task_id, f'{pre_msg}: delete the slot success.')
 
         trigger_db_name = cluster_dict['trigger_db_name']
         trigger_db_func = cluster_dict['trigger_db_func']

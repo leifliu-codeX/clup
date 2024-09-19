@@ -347,7 +347,7 @@ def delete_db(req):
     polar_type_list = ['reader', 'standby']
     polar_type = db_info.get("polar_type", None)
     if polar_type in polar_type_list:
-        code, result = polar_lib.delete_polar_replica(db_id)
+        code, result = polar_lib.delete_replication_slot(db_id)
         if code != 0:
             more_msg = result
 

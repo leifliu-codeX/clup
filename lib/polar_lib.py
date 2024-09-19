@@ -676,33 +676,189 @@ def edit_reader_conf(rpc, db_id, pgdata, repl_app_name, repl_user, up_db_repl_ip
     return err_code, err_msg
 
 
-def create_replication_slot(up_db_info, slot_name):
-    """在主库中创建复制槽
+def set_recovery_conf(db_id, up_db_id=None):
+    """配置备库的复制信息
+
+    Args:
+        rpc (_type_): _description_
+        db_id (_type_): _description_
     """
-    db_name = 'template1'
-    port = up_db_info["port"]
-    up_db_host = up_db_info["host"]
-    db_user = up_db_info["db_user"]
-    os_user = up_db_info["os_user"]
+    # 获取当前库的信息
+    db_info_list = dao.get_db_info(db_id)
+    db_info = db_info_list[0]
+
+    # 获取上级库的流复制信息
+    sql = "SELECT repl_ip, port, pgdata, repl_app_name, db_detail->'repl_user' as repl_user FROM clup_db WHERE db_id=%s"
+    if not up_db_id:
+        up_db_id = db_info["up_db_id"]
+    rows = dbapi.query(sql, (up_db_id, ))
+    if not rows:
+        return -1, f"Cant get the superior instance information for the cluster(cluster_id={db_info['cluster_id']})."
+    up_db_repl_info = rows[0]
+
+    # setting_dict 存放要配置的参数信息
+    setting_dict = {"recovery_target_timeline": "'latest'"}
+
+    # 生成primary_conninfo字符串
+    up_db_port = up_db_repl_info["port"]
+    up_db_repl_ip = up_db_repl_info["repl_ip"]
+    up_db_repl_user = up_db_repl_info["repl_user"]
+    repl_app_name = db_info.get("repl_app_name", db_info["repl_ip"])
+    setting_dict["primary_conninfo"] = f"'user={up_db_repl_user} host={up_db_repl_ip} port={up_db_port} sslmode=prefer sslcompression=0 application_name={repl_app_name}'"
+
+    # reader节点和standby节点写入的信息不一样
+    polar_type = db_info["polar_type"]
+    if polar_type == "reader":
+        setting_dict["polar_replica"] = "'on'"
+        setting_dict["primary_slot_name"] = f"'replica{db_id}'"
+        # primary_slot_name = f"replica{db_id}"
+        # content = f"polar_replica='on'\nrecovery_target_timeline='latest'\nprimary_slot_name='{primary_slot_name}'\nprimary_conninfo='{primary_conninfo}'"
+    elif polar_type == "standby":
+        setting_dict["standby_mode"] = "'on'"
+        setting_dict["primary_slot_name"] = f"'standby{db_id}'"
+        # primary_slot_name = f"standby{db_id}"
+        # content = f"recovery_target_timeline='latest'\nprimary_slot_name='{primary_slot_name}'\nprimary_conninfo='{primary_conninfo}'"
+
+    # 获取rpc连接
+    code, result = rpc_utils.get_rpc_connect(db_info["host"])
+    if code != 0:
+        return -1, f"Connect the host({db_info['host']}) failed, {result}."
+    rpc = result
+
+    # polardb11之后的版本，写入的文件不一样
+    pgdata = db_info["pgdata"]
+    recovery_file = f"{pgdata}/recovery.conf"
+    polar_version = int(db_info["version"].split(".")[0])
+    if polar_version == 11:
+        target_file = f"{pgdata}/recovery.conf"
+    else:
+        # 先读取postgresql.auto.conf,如果其中有配置项primary_conninfo,则使用postgresql.auto.conf
+        target_file = f"{pgdata}/postgresql.auto.conf"
+        code, item_dict = rpc.read_config_file_items(target_file, ['primary_conninfo'])
+        if code != 0 or not item_dict.get('primary_conninfo'):
+            target_file = f"{pgdata}/postgresql.conf"
+        # 如果是15及以上的版本，则需要创建standby.signal文件
+        recovery_file = f"{pgdata}/standby.signal"
     try:
-        rpc = None
-        err_code, err_msg = rpc_utils.get_rpc_connect(up_db_host)
-        if err_code != 0:
-            err_msg = f"Connect to host({up_db_host}) failed."
-            return err_code, err_msg
-        rpc = err_msg
-        sql = f"select pg_create_physical_replication_slot('{slot_name}');"
-        cmd = f"""su - {os_user} -c "psql -U {db_user} -p {port} -d {db_name} -c \\"{sql}\\" " """
-        err_code, err_msg, _out_msg = rpc.run_cmd_result(cmd)
-        if err_code != 0:
-            err_msg = f"run cmd({cmd}) failed, {err_msg}."
-            return err_code, err_msg
+        if not rpc.os_path_exists(recovery_file):
+            # 新建一个空文件
+            code, result = rpc.os_write_file(target_file, 0, b"")
+            if code != 0:
+                return -1, f"Create the file({target_file}) failed, {result}."
+
+        # 将配置信息写入文件
+        rpc.modify_config_type1(target_file, setting_dict, deli_type=1, is_backup=False)
+
+        # 获取postgresql.conf文件属主
+        example_file = f"{pgdata}/postgresql.conf"
+        code, result = rpc.os_stat(example_file)
+        if code != 0:
+            return -1, result
+        st_dict = result
+
+        # 修改文件属主
+        code, result = rpc.os_chown(recovery_file, st_dict['st_uid'], st_dict['st_gid'])
+        if code != 0:
+            return -1, f"Chown file {recovery_file} error: {result}."
+        # 修改文件权限
+        code, result = rpc.os_chmod(recovery_file, 0o600)
+        if code != 0:
+            return -1, f"Chmod file {recovery_file} error: {result}."
+
     except Exception:
-        return -1, traceback.format_exc()
+        return -1, f"Modify the reocvery information with unexpected error, {traceback.format_exc()}."
     finally:
         if rpc:
             rpc.close()
-    return err_code, err_msg
+
+    return 0, "Success"
+
+
+def create_replication_slot(db_id):
+    """在上级库中创建复制槽
+    """
+
+    # get the instance info
+    sql = "SELECT cluster_id, up_db_id, db_detail->'polar_type' as polar_type FROM clup_db WHERE db_id=%s"
+    rows = dbapi.query(sql, (db_id, ))
+    if not rows:
+        return -1, f"Cant find any records for the instance(db_id={db_id})."
+    node_info = dict(rows[0])
+
+    # 查询slot_name是否存在，存在则删除
+    polar_type = node_info["polar_type"]
+    if polar_type == "standby":
+        slot_name = f"standby{db_id}"
+    else:
+        slot_name = f"replica{db_id}"
+
+    try:
+        # 获取上级库的信息
+        up_db_info = dao.get_db_conn_info(node_info['up_db_id'])
+        if not up_db_info:
+            return -1, f"Get the instance database({node_info['up_db_id']}) connect information failed."
+
+        # get the database connect
+        db_conn = dao.get_db_conn(up_db_info)
+        if not db_conn:
+            return -1, f"Connect the database instance(host={up_db_info['host']},port={up_db_info['port']}) failed."
+
+        # 查询当前的slot_name是否已经存在,已经存在的话就不需要创建了
+        sql = "SELECT slot_name FROM pg_replication_slots WHERE slot_name=%s"
+        rows = dbapi.conn_query(db_conn, sql, (slot_name, ))
+        if not rows:
+            sql = f"SELECT pg_create_physical_replication_slot('{slot_name}');"
+            dbapi.conn_execute(db_conn, sql)
+
+    except Exception:
+        return -1, f"Create the replication slot with unexpected error, {traceback.format_exc()}."
+
+    return 0, "Success"
+
+
+def delete_replication_slot(db_id, slot_db_id=None):
+    """检查并删除复制槽,如果未指定slot_db_id则要删除的以自身db_id命名的槽
+    """
+
+    # get the instance info
+    sql = "SELECT cluster_id, up_db_id FROM clup_db WHERE db_id=%s"
+    rows = dbapi.query(sql, (db_id, ))
+    if not rows:
+        return -1, f"Cant find any records for the instance(db_id={db_id})."
+    node_info = dict(rows[0])
+
+    # 获取slot_db_id的信息
+    if not slot_db_id:
+        slot_db_id = db_id
+    polar_type = get_polar_type(slot_db_id)
+    if polar_type == "standby":
+        slot_name = f"standby{slot_db_id}"
+    else:
+        slot_name = f"replica{slot_db_id}"
+
+    try:
+        # 获取上级库的信息
+        up_db_info = dao.get_db_conn_info(node_info['up_db_id'])
+        if not up_db_info:
+            return -1, f"Get the instance database({node_info['up_db_id']}) connect information failed."
+
+        # get the database connect
+        db_conn = dao.get_db_conn(up_db_info)
+        if not db_conn:
+            return -1, f"Connect the database instance(host={up_db_info['host']},port={up_db_info['port']}) failed."
+
+        sql = "SELECT slot_name FROM pg_replication_slots WHERE slot_name=%s"
+        rows = dbapi.conn_query(db_conn, sql, (slot_name, ))
+        if rows:
+            # 需要再连接一次数据库
+            db_conn = dao.get_db_conn(up_db_info)
+            sql = f"SELECT pg_drop_replication_slot('{slot_name}');"
+            dbapi.conn_execute(db_conn, sql)
+
+    except Exception:
+        return -1, f"Delete the replication slot with unexpected error, {traceback.format_exc()}."
+
+    return 0, "The replication slot in the primary database has been deleted."
 
 
 def mv_recovery(db_id):
@@ -737,61 +893,112 @@ def mv_recovery(db_id):
     return 0, "change file name success"
 
 
-def update_recovery(db_id, new_primary_host, new_primary_port, new_primary_pgdata=None):
-    """主备切换配置备库recovery.conf文件
+def remove_recovery_conf(db_id):
+    """移除复制配置信息
+
+    Args:
+        db_id (_type_): _description_
     """
-    sql = f"SELECT host,repl_app_name,pgdata, db_detail->'repl_user' as repl_user, " \
-        f"db_detail->'repl_pass' as repl_pass FROM clup_db WHERE db_id={db_id}"
-    rows = dbapi.query(sql)
+    # 获取当前库的信息
+    db_info_list = dao.get_db_info(db_id)
+    db_info = db_info_list[0]
+    pgdata = db_info["pgdata"]
+    polar_version = int(db_info["version"].split(".")[0])
+
+    code, result = rpc_utils.get_rpc_connect(db_info["host"])
+    if code != 0:
+        return -1, f"Connect to host({db_info['host']}) failed."
+    rpc = result
+
+    # 如果是PolarDB11，将recovery.conf文件改名即可
+    if polar_version == 11:
+        target_file = f'{pgdata}/recovery.conf'
+        is_exists = rpc.os_path_exists(target_file)
+        if is_exists:
+            code, result = rpc.change_file_name(target_file, f"{pgdata}/recovery.done")
+            if code != 0:
+                return -1, f"Rename the file({target_file}) failed, {result}."
+
+        return 0, "Success"
+
+    # 后面是处理PolarDB15及之后的版本
+    remove_setting_list = [
+        "standby_mode",
+        "polar_replica",
+        "primary_slot_name",
+        "primary_conninfo",
+        "recovery_target_timeline"
+    ]
+
+    # 读取postgresql.auto.conf配置，剔除相关配置后，重新写入
+    target_file_list = [f"{pgdata}/postgresql.auto.conf", f"{pgdata}/postgresql.conf"]
+    for target_file in target_file_list:
+        if not rpc.os_path_exists(target_file):
+            continue
+
+        code, content = rpc.file_read(target_file)
+        if code != 0:
+            return -1, f"Read the content from the file({target_file}) failed, {content}."
+        # 移除相关配置
+        new_content = ""
+        for line in content.split("\n"):
+            if line.startswith("#"):
+                new_content += f"{line}\n"
+                continue
+            setting_name = line.split("=")[0].strip()
+            if setting_name in remove_setting_list:
+                line = f"#{line}"
+            new_content += f"{line}\n"
+        # 重新写入内容
+        code, result = rpc.file_write(target_file, new_content)
+        if code != 0:
+            return -1, f"Write the content into the file({target_file}) failed, {result}."
+
+    return 0, "Success"
+
+
+def update_primary_conninfo(db_id, up_db_id):
+    """主备切换更新备库复制信息
+    """
+    # 获取当前库的信息
+    db_info_list = dao.get_db_info(db_id)
+    db_info = db_info_list[0]
+    pgdata = db_info["pgdata"]
+    polar_version = int(db_info["version"].split(".")[0])
+
+    # 获取上级库的流复制信息
+    sql = """SELECT repl_ip, port, repl_app_name,
+    db_detail->'repl_user' as repl_user FROM clup_db WHERE db_id=%s
+    """
+    rows = dbapi.query(sql, (up_db_id, ))
     if not len(rows):
         return -1, f"No information related to the database(db_id={db_id}) was found."
+    up_db_info = rows[0]
 
-    rpc = None
-    rpc_read_file = None
-    db_dict = rows[0]
     try:
-        pgdata = db_dict['pgdata']
-        host = db_dict['host']
-        err_code, rpc = rpc_utils.get_rpc_connect(host)
-        if err_code != 0:
-            err_msg = f"Connect to host({host}) failed"
-            return err_code, err_msg
+        rpc = None
+        code, result = rpc_utils.get_rpc_connect(db_info["host"])
+        if code != 0:
+            return -1, f"Connect to host({db_info['host']}) failed, {result}."
+        rpc = result
+
+        up_db_port = up_db_info["port"]
+        up_db_repl_ip = up_db_info["repl_ip"]
+        up_db_repl_user = up_db_info["repl_user"]
+        repl_app_name = db_info.get("repl_app_name", db_info["repl_ip"])
+
+        primary_conninfo = f"application_name={repl_app_name} user={up_db_repl_user}" \
+            f" host={up_db_repl_ip} port={up_db_port} sslmode=disable sslcompression=1"
+        recovery_conf = {'primary_conninfo': f"'{primary_conninfo}'"}
 
         # 读取recovery.conf文件内容
-        recovery_file = f"{pgdata}/recovery.conf"
-
-        # 如果传递了新主库的pgdata则配置旧主库的recovery.conf文件,需要先获取新主库旧的配置文件
-        if new_primary_pgdata:
-            host = new_primary_host
-            recovery_file = f"{new_primary_pgdata}/recovery.conf"
-            err_code, read_file_rpc = rpc_utils.get_rpc_connect(host)
-            if err_code != 0:
-                err_msg = f"Connect to host({host}) failed"
-                return err_code, err_msg
-        else:
-            read_file_rpc = rpc
-
-        err_code, err_msg = read_file_rpc.read_config_file_items(recovery_file, [], True)
-        if err_code != 0:
-            return -1, f"Failed to read the content of the {recovery_file} file located at {host}:{err_msg}"
-        old_recovery_conf = err_msg
-
-        if new_primary_pgdata:
-            read_file_rpc.close()
-            recovery_file = f"{pgdata}/recovery.conf"
-            # 创建一个空文件
-            err_code, err_msg = rpc.os_write_file(recovery_file, 0, b"")
-            if err_code != 0:
-                return err_code, err_msg
-
-        primary_conninfo = f"application_name={db_dict['repl_app_name']} user={db_dict['repl_user']}" \
-            f" host={new_primary_host} port={new_primary_port} sslmode=disable sslcompression=1"
-        del old_recovery_conf['primary_conninfo']
-        old_recovery_conf.update({'primary_conninfo': f"'{primary_conninfo}'"})
-        recovery_conf = old_recovery_conf
+        target_file = f"{pgdata}/recovery.conf"
+        if polar_version > 11:
+            target_file = f"{pgdata}/postgresql.auto.conf"
 
         # 更新recovery.conf文件
-        rpc.modify_config_type1(recovery_file, recovery_conf, is_backup=False)
+        rpc.modify_config_type1(target_file, recovery_conf, is_backup=False)
+        dao.update_up_db_id(db_id, up_db_id, is_primary=0)
 
         # 把文件recovery.conf属主改成于postgresql.conf相同
         example_file = f"{pgdata}/postgresql.conf"
@@ -799,21 +1006,20 @@ def update_recovery(db_id, new_primary_host, new_primary_port, new_primary_pgdat
         if err_code != 0:
             return err_code, err_msg
         st_dict = err_msg
-        err_code, err_msg = rpc.os_chown(recovery_file, st_dict['st_uid'], st_dict['st_gid'])
+        err_code, err_msg = rpc.os_chown(target_file, st_dict['st_uid'], st_dict['st_gid'])
         if err_code != 0:
-            err_msg = f"chown file {recovery_file} error: {err_msg}"
+            err_msg = f"chown file {target_file} error: {err_msg}"
             return err_code, err_msg
-        err_code, err_msg = rpc.os_chmod(recovery_file, 0o600)
+        err_code, err_msg = rpc.os_chmod(target_file, 0o600)
         if err_code != 0:
-            err_msg = f"chmod file {recovery_file} error: {err_msg}"
+            err_msg = f"chmod file {target_file} error: {err_msg}"
             return err_code, err_msg
     except Exception:
         return -1, traceback.format_exc()
     finally:
         if rpc:
             rpc.close()
-        if rpc_read_file:
-            rpc_read_file.close()
+
     return 0, "Configuration of recovery.conf completed."
 
 
@@ -825,7 +1031,7 @@ def delete_polar_datadir(rpc, db_id):
     sql = """SELECT is_primary,
     db_detail->'polar_type' as polar_type,
     db_detail->'pfs_disk_name' as pfs_disk_name,
-    db_detail->'polar_datadir'as polar_datadir FROM clup_db WHERE db_id=%(db_id)s
+    db_detail->'polar_datadir'as polar_datadir FROM clup_db WHERE db_id=%s
     """
     rows = dbapi.query(sql, (db_id, ))
     if not rows:
@@ -852,7 +1058,7 @@ def delete_polar_datadir(rpc, db_id):
     except Exception:
         return -1, f"Delete the polar shared directory with unexpected error, {traceback.format_exc()}."
 
-    return 0, err_msg
+    return 0, "Success"
 
 
 def set_sr_config_file(rpc, pg_major_int_version, repl_user, repl_pass, up_db_repl_ip, up_db_port, repl_app_name, pgdata, primary_slot_name, recovery_min_apply_delay=None):
@@ -979,72 +1185,6 @@ def check_and_offline_cluster(db_id):
     if res is None:
         return -1, f"The status of the cluster(cluster_id={cluster_id}) has changed, and it's not possible to bring it offline."
     return 0, f"Offline cluster_id={cluster_id} is successed"
-
-
-def delete_polar_replica(db_id):
-    """检查并删除主库中的复制槽
-    """
-
-    operation = f"Delete replication slot of the database(db_id={db_id}) on the primary database"
-
-    # get the instance info
-    sql = "SELECT cluster_id, host, port, pgdata, db_detail->'version' as version FROM clup_db WHERE db_id=%s"
-    rows = dbapi.query(sql, (db_id, ))
-    if not rows:
-        return -1, f"{operation}: Cant find any records for the instance(db_id={db_id})."
-    node_info = dict(rows[0])
-
-    # test connect the host
-    code, result = rpc_utils.get_rpc_connect(node_info["host"])
-    if code != 0:
-        return -1, f"{operation}: Connect the host({node_info['host']}) failed, {result}."
-    rpc = result
-
-    try:
-        # get the primary_slot_name from the instance configure file
-        target_file = f"{node_info['pgdata']}/recovery.conf"
-        polar_version = int(node_info["version"].split(".")[0])
-        if polar_version > 11:
-            target_file = f"{node_info['pgdata']}/postgresql.conf"
-
-        code, result = rpc.read_config_file_items(target_file, ['primary_slot_name'])
-        if code != 0:
-            return -1, f"{operation}: Get the setting(primary_slot_name) failed, {result}."
-        # 此处返回的是"'aa'"形式,所以后面sql中不需要再加‘’
-        slot_name = result.get('primary_slot_name')
-        # polardb15的话需要再检查postgresql.auto.conf文件
-        if polar_version > 11 or not slot_name:
-            target_file = f"{node_info['pgdata']}/postgresql.auto.conf"
-            if rpc.os_path_exists(target_file):
-                code, result = rpc.read_config_file_items(target_file, ['primary_slot_name'])
-                if code != 0:
-                    return -1, f"{operation}: Get the setting(primary_slot_name) failed, {result}."
-                slot_name = result.get('primary_slot_name', slot_name)
-        if not slot_name:
-            return 1, f"{operation}: The instance is no set primary_slot_name."
-
-        # get the primary info
-        primary_info = dao.get_cluster_primary(node_info['cluster_id'])
-        if not primary_info:
-            return -1, f"{operation}: Not find the primary node information for the cluster(cluster_id={node_info['cluster_id']})."
-        # primary_info is a list
-        primary_conn_info = dao.get_db_conn_info(primary_info[0]['db_id'])
-        if not primary_conn_info:
-            return -1, f"{operation}: Get the instance database connect information failed."
-        db_conn = dao.get_db_conn(primary_conn_info)
-        if not db_conn:
-            return -1, f"{operation}: Connect the primary node(host={primary_conn_info['host']},port={primary_conn_info['port']}) failed."
-
-        sql = f"select pg_drop_replication_slot({slot_name});"
-        dbapi.conn_execute(db_conn, sql)
-
-    except Exception:
-        return -1, f"{operation} with unexpected error, {traceback.format_exc()}."
-    finally:
-        if rpc:
-            rpc.close()
-
-    return 0, "The replication slot in the primary database has been deleted."
 
 
 def is_exists_recovery(host, pgdata, polar_version):

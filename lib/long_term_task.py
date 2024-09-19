@@ -1104,8 +1104,7 @@ def build_polar_reader(task_id, node_info, up_db_info, pfs_info):
 
         step = 'Create a replication slot in the master database'
         general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
-        slot_name = f'replica{node_info["db_id"]}'
-        err_code, err_msg = polar_lib.create_replication_slot(up_db_info, slot_name)
+        err_code, err_msg = polar_lib.create_replication_slot(node_info["db_id"])
         if err_code != 0 and err_code != 1:
             return -1, err_msg
         general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
@@ -1238,8 +1237,7 @@ def build_polar_standby(task_id, node_info, up_db_info):
 
         step = 'Create a replication slot in the master database'
         general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
-        slot_name = f'standby{node_info["db_id"]}'
-        err_code, err_msg = polar_lib.create_replication_slot(up_db_info, slot_name)
+        err_code, err_msg = polar_lib.create_replication_slot(node_info["db_id"])
         if err_code != 0:
             general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} failed, {err_msg}, Please check and repair manually.")
         else:
@@ -1285,7 +1283,7 @@ def create_polar_sd_cluster(task_id, cluster_id, master_node_info, reader_node_l
         db_detail["polar_type"] = "master"
 
         primary_dict = dict()
-        remove_list = ["port", "pgdata", "host", "repl_ip", "setting_list"]
+        remove_list = ["port", "pgdata", "host", "repl_ip", "storage_size", "setting_list"]
         for setting in remove_list:
             if setting in db_detail:
                 del db_detail[setting]
@@ -1334,7 +1332,7 @@ def create_polar_sd_cluster(task_id, cluster_id, master_node_info, reader_node_l
         code, result = create_polar_master(task_id, master_node_info, pfs_info, setting_dict)
         if code != 0:
             dao.update_db_state(primary_db_id, database_state.FAULT)
-            return code, f"{pre_msg}: Create the master node failed, {err_msg}."
+            return code, f"{pre_msg}: Create the master node failed, {result}."
         dao.update_db_state(primary_db_id, database_state.RUNNING)
 
         # 创建复制用户
@@ -1365,6 +1363,11 @@ def create_polar_sd_cluster(task_id, cluster_id, master_node_info, reader_node_l
             db_detail.update(node_info)
             db_detail["polar_type"] = "reader"
             db_detail["polar_hostid"] = node_index
+
+            remove_list = ["port", "pgdata", "host", "repl_ip", "storage_size"]
+            for setting in remove_list:
+                if setting in db_detail:
+                    del db_detail[setting]
 
             # 插入db表
             db_dict = node_info.copy()

@@ -1823,90 +1823,60 @@ def polar_switch(req):
 
     """
     params = {
-        'cluster_id': csu_http.MANDATORY | csu_http.INT,
-        'db_id': 0,
-        'room_id': 0,
-        'workwx': 0
+        'db_id': csu_http.INT,
+        'cluster_id': csu_http.INT
     }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
     err_code, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 400, pdict
-    cluster_id = pdict['cluster_id']
-    db_id = pdict.get('db_id')
-    room_id = pdict.get('room_id')
-    if not db_id and room_id is None:
-        return 400, 'The room id or database id must be specified'
-    if room_id is not None and not db_id:
-        sql = "SELECT db_id FROM clup_db " \
-              "WHERE db_detail->>'room_id' = %s AND cluster_id = %s AND state = %s AND is_primary=0 ORDER BY scores"
-        rows = dbapi.query(sql, (str(room_id), cluster_id, node_state.NORMAL))
-        if not rows:
-            return 400, f'No standby database in normal HA state is found in the room(room_id={room_id})'
-        db_id = pg_helpers.get_max_lsn_db(rows)
-        if not db_id:
-            return 400, f'No standby database in normal HA state is found in the room(room_id={room_id})'
-    sql = "SELECT COUNT(*) AS cnt FROM clup_db WHERE db_id = %s AND cluster_id = %s"
-    rows = dbapi.query(sql, (db_id, cluster_id))
-    if rows[0]['cnt'] == 0:
-        return 400, f'No database(db_id={db_id}) information found in the cluste(cluster_id={cluster_id})'
 
-    # 数据库操作时时检查是否集群信息存在,存在则判断集群是否下线,如果未下线则不允许操作
-    if cluster_id:
-        return_cluster_state = dao.get_cluster_state(cluster_id)
-        if return_cluster_state != cluster_state.OFFLINE and return_cluster_state != cluster_state.FAILED:
-            return 400, f"Before performing database operations, please take its cluster(cluster_id={cluster_id}) offline"
+    db_id = pdict["db_id"]
+    cluster_id = pdict["cluster_id"]
 
-    sql = 'select db_id from clup_db where is_primary=1 and cluster_id = %s'
+    # 检查集群状态是否离线,如果未离线则不允许操作
+    current_cluster_state = dao.get_cluster_state(cluster_id)
+    if current_cluster_state != cluster_state.OFFLINE and current_cluster_state != cluster_state.FAILED:
+        return 400, f"Before performing database operations, please take its cluster(cluster_id={cluster_id}) offline"
+
+    # Get the current primary instance
+    sql = 'SELECT db_id FROM clup_db WHERE is_primary=1 AND cluster_id=%s'
     rows = dbapi.query(sql, (cluster_id, ))
     if not rows:
-        return 400, f'The primary database is not found in the cluste({cluster_id})'
-    old_primary_db = rows[0]['db_id']
-    sql = f"""SELECT count(*) as cnt from clup_general_task where state=0 and task_data @> '{{"cluster_id": {cluster_id} }}' """
+        return 400, f"Cant find the primary database information for the cluster(cluster_id={cluster_id})."
+    old_primary_db_id = rows[0]['db_id']
+    sql = f"""SELECT count(*) as cnt FROM clup_general_task WHERE state=0 AND task_data @> '{{"cluster_id": {cluster_id} }}' """
     rows = dbapi.query(sql)
     cnt = rows[0]['cnt']
     if cnt > 0:
-        return 400, "The cluster has other operations in progress. Please try again later"
+        return 400, "There are unfinished operation processes in the current cluster. Please try again later."
 
     # 判断是否是standby节点,如果是则返回
-    sql = f"SELECT db_detail->'polar_type' as polar_type from clup_db where db_id = {db_id}"
+    sql = f"SELECT db_detail->'polar_type' as polar_type FROM clup_db WHERE db_id={db_id}"
     rows = dbapi.query(sql)
-    if len(rows):
-        polar_type = rows[0].get("polar_type")
-        if polar_type == "standby":
-            return 400, "The switchover must be performed on a reader node. standby nodes do not support switchover"
+    if not rows:
+        return 400, f"Get the polar_type for this instance(db_id={db_id}) failed."
+    polar_type = rows[0]["polar_type"]
+    if polar_type == "standby":
+        return 400, "The switchover must be performed on a reader node. standby nodes do not support switchover"
 
-    workwx = pdict.get("workwx")
     # 先检测是否可以切换,如果不能,直接返回
     try:
-        ret_code, msg = ha_mgr.test_polar_can_switch(cluster_id, db_id, old_primary_db)
+        ret_code, msg = ha_mgr.test_polar_can_switch(cluster_id, db_id, old_primary_db_id)
         if ret_code != 0:
-            if workwx:
-                workwx['db_id'] = db_id
-                workwx['state'] = "Failed"
-                pg_helpers.send_workwx_alarm(workwx)
             return 400, msg
     except Exception as e:
         logging.error(f"Call test_sr_can_switch exception: {traceback.format_exc()}")
-        if pdict.get("workwx"):
-            workwx['db_id'] = db_id
-            workwx['state'] = "Failed"
-            pg_helpers.send_workwx_alarm(workwx)
         return 400, str(e)
 
     # 因为是一个长时间运行的操作,所以生成一个后台任务,直接返回
     task_name = f"sr_switch (cluster_id={cluster_id}, db_id={db_id})"
     task_id = general_task_mgr.create_task('switch', task_name, {'cluster_id': cluster_id})
-    general_task_mgr.run_task(task_id, ha_mgr.task_polar_switch, (cluster_id, db_id, old_primary_db))
+    general_task_mgr.run_task(task_id, ha_mgr.task_polar_switch, (cluster_id, db_id, old_primary_db_id))
     ret_data = {"task_id": task_id, "task_name": task_name}
     raw_data = json.dumps(ret_data)
-    if workwx:
-        try:
-            workwx['db_id'] = db_id
-            pg_helpers.send_workwx_alarm(workwx)
-        except Exception as e:
-            logging.error(f'alarm send failure: {repr(e)}')
+
     return 200, raw_data
 
 

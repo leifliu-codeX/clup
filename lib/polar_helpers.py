@@ -293,22 +293,15 @@ def change_recovery_up_db(db_id, up_db_id, polar_type):
     """修改备库的流复制连接
 
     """
-    rows = dao.get_db_info(up_db_id)
-    if not len(rows):
-        return -1, f"Failed to obtain database(db_id={up_db_id}) information."
-    up_db_host = rows[0]['host']
-    up_db_port = rows[0]['port']
-
-    # 先检查是否存在recovery.conf文件，没有的话直接新建一个
-    err_code, err_msg = polar_lib.check_or_create_recovery_conf(db_id, rows[0])
-    if err_code != 0 and err_code != 1:
+    # 修改复制配置信息
+    err_code, err_msg = polar_lib.set_recovery_conf(db_id, up_db_id)
+    if err_code != 0:
         return -1, err_msg
 
-    # 返回值为0说明存在recovery.conf,为1时已新建不需要再修改
-    if err_code == 0:
-        err_code, err_msg = polar_lib.update_recovery(db_id, up_db_host, up_db_port)
-        if err_code != 0:
-            return -1, err_msg
+    # 创建replication slot
+    code, result = polar_lib.create_replication_slot(db_id)
+    if code != 0:
+        return -1, result
 
     rows = dao.get_db_info(db_id)
     if not len(rows):

@@ -676,9 +676,13 @@ def failover_polar_primary_db(task_id, cluster_id, db_id):
         # 如果不保留级联关系，则把需要把其它备库都指向新的主库
         if not cluster_dict.get('failover_keep_cascaded', False):
             task_log_info(task_id, f"{pre_msg}: change all standby database upper level primary database to host({new_pri_pg['host']})...")
-            for p in clu_db_list:
-                if p['db_id'] != db_id and (not p['is_primary']) and p['state'] == node_state.NORMAL:
-                    need_restart_db.append(p)
+            for node_info in clu_db_list:
+                if node_info['db_id'] != db_id and (not node_info['is_primary']) and node_info['state'] == node_state.NORMAL:
+                    need_restart_db.append(node_info)
+
+                    # 更新上级库信息
+                    polar_lib.update_primary_conninfo(node_info['db_id'], new_pri_pg['db_id'])
+
             task_log_info(
                 task_id,
                 f"{pre_msg}:  change all standby database upper level primary database to host({new_pri_pg['host']}) completed.")
@@ -710,10 +714,6 @@ def failover_polar_primary_db(task_id, cluster_id, db_id):
             if polar_type in polar_type_list:
                 err_code, err_msg = polar_lib.stop_pfs(db_dict['host'], db_dict['db_id'])
                 task_log_error(task_id, f"stop pfs failed, {err_msg}.")
-
-            # 此出调用的函数中会重启数据库，当前会让其重启失败，后面再做启动操作
-            polar_lib.update_recovery(db_dict['db_id'], new_pri_pg['host'], new_pri_pg['port'])
-            dao.update_up_db_id(new_pri_pg['db_id'], db_dict['db_id'], db_dict['is_primary'])
 
         # 把新主库的上级库设置为空
         dao.update_up_db_id('null', new_pri_pg['db_id'], 1)
