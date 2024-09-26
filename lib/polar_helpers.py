@@ -176,7 +176,7 @@ def build_polar_standby(pdict, polar_type):
         node_info["port"] = up_db_dict["port"]
         node_info['db_user'] = up_db_dict['db_user']
         node_info['db_pass'] = up_db_dict['db_pass']
-        node_info["primary_slot_name"] = f"replica{db_dict['db_id']}"
+        node_info["primary_slot_name"] = f"csu_replica{db_dict['db_id']}"
 
         # rpc_dict 放下创建备库的调用的参数
         # rpc_dict = db_dict
@@ -187,7 +187,7 @@ def build_polar_standby(pdict, polar_type):
         # rpc_dict['up_db_pgdata'] = up_db_dict['pgdata']
         # rpc_dict["up_db_repl_ip"] = up_db_dict["repl_ip"]
 
-        # rpc_dict['primary_slot_name'] = f"replica{polar_hostid}"
+        # rpc_dict['primary_slot_name'] = f"csu_replica{polar_hostid}"
 
         # rpc_dict['pfs_disk_name'] = up_db_dict["pfs_disk_name"]
         # rpc_dict["polar_datadir"] = up_db_dict["polar_datadir"]

@@ -1226,12 +1226,13 @@ def polar_switch(task_id, cluster_id, new_pri_db_id, old_pri_db_id):
                     continue
 
                 # 修改复制配置信息
-                log_info(task_id, f"{pre_msg}: Configure the recovery.conf file, current database({db_dict['host']}).")
+                log_info(task_id, f"{pre_msg}: Configure the recovery settings, current database({db_dict['host']}).")
                 if db_dict["db_id"] == new_pri_db_id:
                     continue
                 elif db_dict["db_id"] == old_pri_db_id:
-                    code, _result = polar_lib.set_recovery_conf(db_dict["db_id"], new_pri_db_id)
+                    code, result = polar_lib.set_recovery_conf(db_dict["db_id"], new_pri_db_id)
                     if code != 0:
+                        log_error(task_id, f"{pre_msg}: Set the recovery configuration for the instance(db_id={db_dict['db_id']}) failed, {result}.")
                         continue
                 else:
                     code, result = polar_lib.update_primary_conninfo(db_dict["db_id"], new_pri_db_id)
@@ -1273,11 +1274,11 @@ def polar_switch(task_id, cluster_id, new_pri_db_id, old_pri_db_id):
         log_info(task_id, f"{pre_msg}: current new primary database({new_pri_db_dict['host']}) stopped.")
 
         # 移除新主库上的复制配置文件
-        log_info(task_id, f'{pre_msg}: rename the new primary database recovery.conf to recovery.done...')
+        log_info(task_id, f'{pre_msg}: remove the new primary database recovery configuration...')
         err_code, err_msg = polar_lib.remove_recovery_conf(new_pri_db_id)
         if err_code != 0:
             return -1, err_msg
-        log_info(task_id, f'{pre_msg}: rename option is finished.')
+        log_info(task_id, f'{pre_msg}: remove recovery configuration is finished.')
 
         # 配置完成，开始启动数据库
         for db_dict in clu_db_list:
@@ -1297,16 +1298,16 @@ def polar_switch(task_id, cluster_id, new_pri_db_id, old_pri_db_id):
             dao.update_db_state(db_dict['db_id'], database_state.RUNNING)
             log_info(task_id, f"{pre_msg}: current database({db_dict['host']}) is running.")
 
-        # 删除掉新主库对应的复制槽
-        log_info(task_id, f'{pre_msg}: delete the old slot...')
-        err_code, err_msg = polar_lib.delete_replication_slot(old_pri_db_id, slot_db_id=new_pri_db_id)
+        # 为旧主库创建一个新的复制槽，在新主库上操作
+        log_info(task_id, f'{pre_msg}: create a new slot for old primary...')
+        err_code, err_msg = polar_lib.create_replication_slot(old_pri_db_id)
         if err_code != 0:
             return -1, err_msg
         log_info(task_id, f'{pre_msg}: delete the slot success.')
 
-        # 为旧主库创建一个新的复制槽
-        log_info(task_id, f'{pre_msg}: create a new slot for old primary...')
-        err_code, err_msg = polar_lib.create_replication_slot(old_pri_db_id)
+        # 删除掉新主库对应的复制槽，在新主库上操作
+        log_info(task_id, f'{pre_msg}: delete the old slot...')
+        err_code, err_msg = polar_lib.delete_replication_slot(new_pri_db_id, is_self=True)
         if err_code != 0:
             return -1, err_msg
         log_info(task_id, f'{pre_msg}: delete the slot success.')
