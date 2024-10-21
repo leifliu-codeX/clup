@@ -404,7 +404,7 @@ def build_pg_standby(task_id, host, db_id, rpc_dict):
 
         # 连接主库的密码配置到.pgpass中
         err_code, err_msg = pg_db_lib.dot_pgpass_add_item(
-            rpc, os_user, up_db_repl_ip, up_db_port, 'replication', repl_user, repl_pass,
+            rpc, os_user, up_db_repl_ip, up_db_port, '*', repl_user, repl_pass,
         )
         general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} step successful.")
 
