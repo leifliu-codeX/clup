@@ -175,6 +175,11 @@ def create_pg_db(task_id, host, db_id, rpc_dict):
                     # 10版本及以上，wal_level默认已经时replica，不需要设置
                     if pg_main_ver <= 9:
                         setting_dict['wal_level'] = 'replica'
+        
+        # PostgreSQL17 去掉了参数old_snapshot_threshold
+        if pg_main_ver >= 17:
+            if 'old_snapshot_threshold' in setting_dict:
+                del setting_dict['old_snapshot_threshold']
 
         try:
             postgresql_conf = f'{pgdata}/postgresql.conf'
