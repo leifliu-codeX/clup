@@ -95,6 +95,48 @@ def source_check(host, port, pgdata):
     return 0, "Check is OK"
 
 
+@rpc_utils.rpc_or_host
+def check_plugs(rpc, pg_bin_path, plug_str):
+    """Check the plugs is installed or not
+
+    Args:
+        rpc (_type_): _description_
+        pg_bin_path (_type_): _description_
+        plug_str (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+    if "'" in plug_str:
+        plug_str = plug_str.strip("'")
+    plug_list = plug_str.split(",")
+
+    not_exists_list = list()
+    for plug_name in plug_list:
+        is_exists = False
+        plug_name = plug_name.strip()
+        # check plug.control file
+        plug_ctl_file = f"{pg_bin_path}/../share/extension/{plug_name}.control"
+        if rpc.os_path_exists(plug_ctl_file):
+            is_exists = True
+        else:
+            plug_ctl_file = f"{pg_bin_path}/../share/postgresql/extension/{plug_name}.control"
+            if rpc.os_path_exists(plug_ctl_file):
+                is_exists = True
+
+        # some plug not has control file(such as: auto_explain)
+        if not is_exists:
+            plug_so_file = f"{pg_bin_path}/../lib/{plug_name}.so"
+            if not rpc.os_path_exists(plug_so_file):
+                not_exists_list.append(plug_name)
+
+    if not_exists_list:
+        ret_msg = f"Some plugs not install: {','.join(not_exists_list)}."
+        return -1, ret_msg
+
+    return 0, ""
+
+
 def create_db(pdict):
     """创建数据库
 
@@ -1552,13 +1594,13 @@ def pretty_size(val):
         [type]: [description]
     """
     if val >= 100 * 1024 * 1024 * 1024 * 1024:
-        return f'{val/1024/1024/1024/1024:.0f}TB'
+        return f'{val / 1024 / 1024 / 1024 / 1024:.0f}TB'
     elif val >= 100 * 1024 * 1024 * 1024:
-        return f'{val/1024/1024/1024:.0f}GB'
+        return f'{val / 1024 / 1024 / 1024:.0f}GB'
     elif val >= 100 * 1024 * 1024:
-        return f'{val/1024/1024:.0f}MB'
+        return f'{val / 1024 / 1024:.0f}MB'
     elif val >= 100 * 1024:
-        return f'{val/1024:.0f}kB'
+        return f'{val / 1024:.0f}kB'
     else:
         return f'{val}'
 
@@ -1573,13 +1615,13 @@ def pretty_ms(val):
         [type]: [description]
     """
     if val >= 10 * 24 * 3600 * 1000:
-        return f'{val/24/3600/1000:.0f}d'
+        return f'{val / 24 / 3600 / 1000:.0f}d'
     elif val >= 10 * 3600 * 1000:
-        return f'{val/3600/1000:.0f}h'
+        return f'{val / 3600 / 1000:.0f}h'
     elif val >= 10 * 60 * 1000:
-        return f'{val/60/1000:.0f}MB'
+        return f'{val / 60 / 1000:.0f}MB'
     elif val >= 1000:
-        return f'{val/1000:.0f}s'
+        return f'{val / 1000:.0f}s'
     else:
         return f'{val}ms'
 
@@ -1817,7 +1859,7 @@ def update_pg_hba(pdict, option="update"):
         elif key == "address":
             address = value
             if pdict['option'] == "update" and "/" in address:
-                address = '\/'.join(address.split("/"))
+                address = r'\/'.join(address.split("/"))
             conf_str = f"{conf_str}{address}\t"
         elif key == "pg_ident":
             pg_indet_str = value

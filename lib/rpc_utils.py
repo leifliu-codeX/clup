@@ -29,6 +29,35 @@ import config
 import csurpc
 
 
+# 用于修饰函数,函数与第一个参数可以传rpc也可以传host,通过此修饰函数,自动判断第一个参数的类型,如果是字符串,则认为是host
+def rpc_or_host(a_func):
+    def wrap_func(rpc_host, *arg, **kwargs):
+        rpc = None
+        need_close_rpc = False
+        try:
+            if isinstance(rpc_host, str):
+                host = rpc_host
+                err_code, err_msg = get_rpc_connect(host, 3)
+                if err_code != 0:
+                    return -1, f"Host connection failure({host})"
+                need_close_rpc = True
+                rpc = err_msg
+            else:
+                rpc = rpc_host
+        except Exception:
+            return -1, traceback.format_exc()
+
+        try:
+            return a_func(rpc, *arg, **kwargs)
+        except Exception:
+            return -1, traceback.format_exc()
+        finally:
+            if rpc and need_close_rpc:
+                rpc.close()
+        return 0, ''
+    return wrap_func
+
+
 def get_server_connect(host='127.0.0.1', conn_timeout=5):
     try:
         rpc_pass = config.get('internal_rpc_pass')
