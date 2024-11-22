@@ -357,7 +357,10 @@ def get_pg_settings(req):
         11: False,
         12: False,
         13: False,
-        14: False
+        14: False,
+        15: False,
+        16: False,
+        17: False
     }
     for row in rows:
         setted_dict[row["pg_version"]] = True
