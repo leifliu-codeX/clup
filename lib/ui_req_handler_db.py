@@ -1566,7 +1566,7 @@ def get_init_db_conf(req):
     name_common_level_dict = {}
     for row in rows:
         if pdict.get("db_type", 1) == 11 and row["setting_name"] == "log_destination":
-            # 对于PolarDB,如果是15版本,log_destination的值不能时csvlog
+            # FIXME: 当前PolarDB15的log_destination的值不能是csvlog，后续修复后改回来
             major_version = int(float(pdict["version"]))
             if major_version >= 15:
                 row["val"] = "stderr"
@@ -2352,7 +2352,11 @@ def get_pg_log_file_list(req):
             code, item_dict = rpc.read_config_file_items(postgresql_conf, setting_list)
             if code != 0:
                 return 400, f"Cant read the settings values from {postgresql_conf}, {item_dict}."
-            log_info.update(item_dict)
+            # maybe the setting is not set
+            if item_dict["log_directory"]:
+                log_info["log_directory"] = item_dict["log_directory"]
+            if item_dict["log_destination"]:
+                log_info["log_destination"] = item_dict["log_destination"]
 
             # read from postgresql.auto.conf and update log_info
             code, item_dict = rpc.read_config_file_items(postgresql_auto_conf, setting_list)

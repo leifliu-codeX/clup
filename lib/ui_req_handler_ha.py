@@ -1620,6 +1620,119 @@ def check_ha(req):
 
 
 # 创建polardb共享存储集群
+def create_polar_unsd_cluster(req):
+    """创建PolarDB流复制集群"""
+    params = {
+        "cluster_name": csu_http.MANDATORY,
+        "pool_id": csu_http.INT,
+        "vip": csu_http.MANDATORY,
+        "port": csu_http.MANDATORY,
+        "db_user": csu_http.MANDATORY,
+        "db_pass": csu_http.MANDATORY,
+        "repl_user": csu_http.MANDATORY,
+        "repl_pass": csu_http.MANDATORY,
+        "db_list": csu_http.MANDATORY,
+        "remark": 0,
+        "trigger_db_name": 0,
+        "trigger_db_func": 0,
+        "probe_db_name": csu_http.MANDATORY,
+        "probe_interval": csu_http.MANDATORY | csu_http.INT,
+        "probe_timeout": csu_http.MANDATORY | csu_http.INT,
+        "probe_retry_cnt": csu_http.MANDATORY | csu_http.INT,
+        "probe_retry_interval": csu_http.MANDATORY | csu_http.INT,
+        "probe_pri_sql": csu_http.MANDATORY,
+        "probe_stb_sql": csu_http.MANDATORY,
+        "wal_segsize": csu_http.INT,  # wal段文件大小，仅PG11及以上版本支持
+        "setting_list": csu_http.MANDATORY,
+    }
+    err_code, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, pdict
+
+    # check vip is used or not
+    check_sql = "SELECT * FROM clup_used_vip WHERE vip=%s"
+    check_rows = dbapi.query(check_sql, (pdict["vip"],))
+    if check_rows:
+        return (
+            400,
+            f"The vip({pdict['vip']}) is aready used by(db_id={check_rows[0]['db_id']},cluster_id={check_rows[0]['cluster_id']}), please check.",
+        )
+
+    try:
+        ret_msg = ""
+        for db in pdict["db_list"]:
+            plug_str = ""
+            setting_list = pdict["setting_list"]
+            for item in setting_list:
+                if item["setting_name"] == "shared_preload_libraries":
+                    plug_str = item["val"]
+
+            if plug_str:
+                code, result = pg_helpers.check_plugs(db["host"], db["pg_bin_path"], plug_str)
+                if code != 0:
+                    ret_msg += f"{db['host']}: {result}"
+
+        if ret_msg:
+            return 400, ret_msg
+
+    except Exception as e:
+        return 400, f"Check the host connect and plugs installed with unexpected error, {str(e)}."
+
+    # 定义cluster_data
+    cluster_data = pdict.copy()
+    del cluster_data["db_list"]
+
+    # 操作记录信息
+    db_info = {"host": [], "pgdata": [], "port": pdict["port"]}
+    # 检查数据库信息是否已经存在
+    for db in pdict["db_list"]:
+        sql = "SELECT db_id FROM clup_db WHERE host=%s AND port = %s AND pgdata= %s "
+        rows = dbapi.query(sql, (db["host"], pdict["port"], db["pgdata"]))
+        if len(rows) > 0:
+            return (
+                400,
+                f"The input database information is({db['host']}:{pdict['port']} "
+                f"pgdata={db['pgdata']}) the same as the existing database.(db_id={rows[0]['db_id']})!",
+            )
+        db_info["host"].append(db["host"])
+        db_info["pgdata"].append(db["pgdata"])
+
+    # 插入集群表
+    sql = (
+        "INSERT INTO clup_cluster(cluster_type, cluster_data,state,lock_time) "
+        "VALUES (%s, %s, %s, %s) RETURNING cluster_id"
+    )
+    # 不要把setting_list存入数据库
+    cluster_data_in_db = cluster_data.copy()
+    del cluster_data_in_db["setting_list"]
+    rows = dbapi.query(sql, (1, json.dumps(cluster_data_in_db), 0, 0))
+    if len(rows) == 0:
+        return 400, "Failed to insert the cluster into the database"
+    cluster_id = rows[0]["cluster_id"]
+    pdict["cluster_id"] = cluster_id
+
+    # insert into clup_used_vip
+    insert_sql = "INSERT INTO clup_used_vip(pool_id, vip, cluster_id, used_reason) VALUES(%s, %s, %s, 2) RETURNING vip"
+    insert_rows = dbapi.query(insert_sql, (pdict["pool_id"], pdict["vip"], cluster_id))
+    if not insert_rows:
+        return 400, f"Excute sql({insert_sql}) failed."
+
+    # 开启线程后台创建
+    task_name = f"create_sr_cluster(cluster_id={pdict['cluster_id']})"
+    task_id = general_task_mgr.create_task(
+        task_type_def.CREATE_SR_CLUSTER, task_name, {"cluster_id": pdict["cluster_id"]}
+    )
+    general_task_mgr.run_task(
+        task_id, long_term_task.task_create_sr_cluster, (cluster_id, pdict)
+    )
+
+    ret_data = {"task_id": task_id, "task_name": task_name}
+    raw_data = json.dumps(ret_data)
+
+    return 200, raw_data
+
+
+# 创建polardb共享存储集群
 def create_polar_sd_cluster(req):
     params = {
         'cluster_name': csu_http.MANDATORY,
