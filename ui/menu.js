@@ -67,7 +67,7 @@ var g_memu_list = {
 				{ "path": "/AgentStatusView", "iconCls": "iconfont el-icon-xnjk", "component": "AgentStatusView", "name": "Agent状态管理", "menuShow": true },
 				{ "path": "/JournalTabManage", "iconCls": "iconfont el-icon-rizhishezhi","component": "JournalTabManage", "name": "日志设置", "menuShow": true },
 				{ "path": '/dbDefaultProps', "iconCls": "el-icon-notebook-2", "component": "dbDefaultProps", "name": '数据库默认参数', "menuShow": true },
-				{ "path": "/clupParameterConfiguration", "iconCls": "iconfont el-icon-canshushezhi","component": "clupParameterConfiguration", "name": "clup参数设置", "menuShow": true },
+				{ "path": "/clupParameterConfiguration", "iconCls": "iconfont el-icon-canshushezhi","component": "clupParameterConfiguration", "name": "CLup参数设置", "menuShow": true },
 			]
 		},
 	]
