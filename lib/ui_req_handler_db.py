@@ -1714,7 +1714,7 @@ def get_pg_bin_path_list(req):
         "host": csu_http.MANDATORY,
     }
     err_code, err_msg, pdict = csu_http.parse_parms(param, req)
-    if err_msg != 0:
+    if err_code != 0:
         return 400, err_msg
     host = pdict['host']
     try:
@@ -1761,7 +1761,7 @@ def get_pg_bin_version(req):
         "pg_bin_path": csu_http.MANDATORY,
     }
     err_code, err_msg, pdict = csu_http.parse_parms(param, req)
-    if err_msg != 0:
+    if err_code != 0:
         return 400, err_msg
     host = pdict['host']
     pg_bin_path = pdict['pg_bin_path']
