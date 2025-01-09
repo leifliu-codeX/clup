@@ -51,7 +51,7 @@ def get_session(user_name):
                     __session_dict.pop(i)
         while True:
             session_id = base64.b64encode(os.urandom(32)).decode()
-            if session_id in __session_dict.keys():
+            if session_id in __session_dict:
                 continue
             break
         session_expired_secs = config.getint('session_expired_secs')
@@ -88,10 +88,9 @@ def login(user_name, session_id, client_hash_value):
         now = time.time()
         if session_id not in __session_dict:
             return False, "session expired!"
-        else:
-            if time.time() > __session_dict[session_id]['expired_time']:
-                __session_dict.pop(session_id)
-                return False, "session expired!"
+        elif time.time() > __session_dict[session_id]['expired_time']:
+            __session_dict.pop(session_id)
+            return False, "session expired!"
 
         if client_hash_value != server_hash_value:
             return False, "用户名或密码错误!"
@@ -134,10 +133,9 @@ def check_session(session_id, _func_name):
         now = time.time()
         if session_id not in __session_dict:
             return -1, "session expired!"
-        else:
-            if time.time() > __session_dict[session_id]['expired_time']:
-                __session_dict.pop(session_id)
-                return -1, "session expired!"
+        elif time.time() > __session_dict[session_id]['expired_time']:
+            __session_dict.pop(session_id)
+            return -1, "session expired!"
         if not __session_dict[session_id]['status']:
             return -1, "session not login!"
         session_expired_secs = config.getint('session_expired_secs')
@@ -154,10 +152,9 @@ def session_is_valid(session_id):
     try:
         if session_id not in __session_dict:
             return False, "session expired!"
-        else:
-            if time.time() > __session_dict[session_id]['expired_time']:
-                __session_dict.pop(session_id)
-                return False, "session expired!"
+        elif time.time() > __session_dict[session_id]['expired_time']:
+            __session_dict.pop(session_id)
+            return False, "session expired!"
         if not __session_dict[session_id]['status']:
             return False, "session not login!"
         return True, "OK"

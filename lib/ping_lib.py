@@ -75,9 +75,9 @@ def __receive_one_ping(my_socket, ID, timeout):
             return
 
         timeReceived = time.time()
-        recPacket, addr = my_socket.recvfrom(1024)
+        recPacket, _addr = my_socket.recvfrom(1024)
         icmpHeader = recPacket[20:28]
-        type, code, checksum, packetID, sequence = struct.unpack(
+        _type, _code, _checksum, packetID, _sequence = struct.unpack(
             "bbHHh", icmpHeader
         )
         if packetID == ID:
@@ -123,8 +123,9 @@ def __do_one(dest_addr, timeout):
     icmp = socket.getprotobyname("icmp")
     try:
         my_socket = socket.socket(socket.AF_INET, socket.SOCK_RAW, icmp)
-    except socket.error as args:
-        (errno, msg) = args
+    except socket.error as wrong:
+        errno = wrong.errno
+        msg = wrong.strerror
         # print(args)
         if errno == 1:
             # Operation not permitted

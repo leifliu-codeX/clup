@@ -25,8 +25,6 @@
 import json
 import logging
 import traceback
-
-
 from http.cookies import SimpleCookie
 
 logger = logging.getLogger('csuhttpd')

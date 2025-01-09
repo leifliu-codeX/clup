@@ -68,7 +68,7 @@ def get_nic_ip_dict():
             r"\s+link/[^ \t]* ([0-9a-fA-F]{2}(:[0-9a-fA-F]{2})*) brd .*", line
         )
         if match:
-            nic["mac"] = match.group(1)
+            nic["mac"] = match.group(1)  # type: ignore
             continue
 
         match = re.search(
@@ -77,7 +77,7 @@ def get_nic_ip_dict():
         if match:
             if "ipv4" not in nic:
                 ipv4 = dict()
-                nic["ipv4"] = ipv4
+                nic["ipv4"] = ipv4  # type: ignore
             ipv4[match.group(1)] = int(match.group(2))
             continue
 
@@ -86,7 +86,7 @@ def get_nic_ip_dict():
         if match:
             if "ipv6" not in nic:
                 ipv6 = dict()
-                nic["ipv6"] = ipv6
+                nic["ipv6"] = ipv6  # type: ignore
             ipv6[match.group(1)] = int(match.group(2))
             continue
     return nic_dict
@@ -270,9 +270,8 @@ def convert_vip_list(vip_info):
 
                 for vip_num in range(start_num, end_num + 1):
                     ret_data.append(f"{sub_net}.{vip_num}")
-            else:
-                if sub_net not in vip_str:
-                    return -1, f"The vip({vip_str}) is not available."
+            elif sub_net not in vip_str:
+                return -1, f"The vip({vip_str}) is not available."
     elif isinstance(vip_info, list):
         if not vip_info:
             return 0, ""
@@ -297,11 +296,10 @@ def convert_vip_list(vip_info):
                 # The end one
                 if vip_num == vip_num_list[-1]:
                     vip_list.append(f"{sub_net}.{start_num}-{sub_net}.{last_num}")
+            elif last_num == start_num:
+                vip_list.append(f"{sub_net}.{last_num}")
             else:
-                if last_num == start_num:
-                    vip_list.append(f"{sub_net}.{last_num}")
-                else:
-                    vip_list.append(f"{sub_net}.{start_num}-{sub_net}.{last_num}")
+                vip_list.append(f"{sub_net}.{start_num}-{sub_net}.{last_num}")
 
             if vip_num == last_num + 1:
                 last_num = vip_num

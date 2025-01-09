@@ -28,6 +28,8 @@ import json
 import logging
 import re
 import time
+import traceback
+from typing import cast
 
 import cluster_state
 import config
@@ -49,9 +51,9 @@ def start_db(req):
     params = {
         "db_id": csu_http.MANDATORY,
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     db_id = pdict['db_id']
     rows = dao.get_db_info(db_id)
     if len(rows) == 0:
@@ -68,7 +70,7 @@ def start_db(req):
             if err_code != 0:
                 return 400, err_msg
         err_code, err_msg = polar_lib.start_pfs(db_dict['host'], db_id)
-        if err_code != 0 and err_code != 1:
+        if err_code not in {0, 1}:
             return 400, err_msg
     # end start pfs
     err_code, err_msg = pg_db_lib.start(db_dict['host'], db_dict['pgdata'])
@@ -82,9 +84,9 @@ def stop_db(req):
     params = {
         "db_id": csu_http.MANDATORY,
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     rows = dao.get_db_info(pdict['db_id'])
     if len(rows) == 0:
@@ -96,7 +98,7 @@ def stop_db(req):
     # 数据库关闭时检查是否集群信息存在,存在则判断集群是否下线,如果未下线则不允许操作
     if db_dict['cluster_id']:
         current_cluster_state = dao.get_cluster_state(db_dict['cluster_id'])
-        if current_cluster_state != cluster_state.OFFLINE and current_cluster_state != cluster_state.FAILED:
+        if current_cluster_state not in {cluster_state.OFFLINE, cluster_state.FAILED}:
             return 400, f"Before performing database operations, please take its cluster(cluster_id={db_dict['cluster_id']}) offline"
 
     # 检查db是否在polardb集群中,如果是则检查是否是最后一个共享存储中的库,是的话需要先下线集群
@@ -141,17 +143,14 @@ def get_instance_list(req):
     }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     page_num = pdict.setdefault('page_num', 1)
     page_size = pdict.setdefault('page_size', 1000)
 
-    if 'filter' in pdict:
-        filter_cond = pdict['filter']
-    else:
-        filter_cond = ''
+    filter_cond = pdict.get("filter", "")
     offset = (page_num - 1) * page_size
 
     where_cond = ""
@@ -206,9 +205,9 @@ def create_db(req):
         'setting_list': csu_http.MANDATORY
     }
 
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     if not pdict['pgdata'].startswith('/'):
         return 400, f"The args pgdata({pdict['pgdata']}) is not startswith '/', please check."
@@ -267,9 +266,9 @@ def create_polardb(req):
         'polar_datadir': 0,                 # polardb 共享盘目录
     }
 
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     if not pdict['pgdata'].startswith('/'):
         return 400, f"The args pgdata({pdict['pgdata']}) is not startswith '/', please check."
@@ -318,9 +317,9 @@ def delete_db(req):
     }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     db_id = pdict['db_id']
 
     sql = """SELECT cluster_id,clup_cluster.state as state,host,pgdata,instance_name,port,
@@ -396,9 +395,9 @@ def restart_db(req):
     }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     sql = """ SELECT cluster_id, host,pgdata, instance_name, db_type,
             db_detail->>'instance_type' as instance_type,
             db_detail->>'db_user' as db_user,
@@ -416,7 +415,7 @@ def restart_db(req):
     # 数据库重启时检查是否集群信息存在,存在则判断集群是否下线,如果未下线则不允许操作
     if cluster_id:
         return_cluster_state = dao.get_cluster_state(cluster_id)
-        if return_cluster_state != cluster_state.OFFLINE and return_cluster_state != cluster_state.FAILED:
+        if return_cluster_state not in {cluster_state.OFFLINE, cluster_state.FAILED}:
             return 400, f"Before performing database operations, please take its cluster(cluster_id={cluster_id}) offline"
 
     err_code, err_msg = rpc_utils.get_rpc_connect(host)
@@ -432,7 +431,7 @@ def restart_db(req):
         polar_type = db_dict.get('polar_type', None)
         if polar_type in polar_type_list:
             err_code, err_msg = polar_lib.start_pfs(host, db_id)
-            if err_code != 0 and err_code != 1:
+            if err_code not in {0, 1}:
                 return 400, err_msg
             pfs_start = True
         # end start pfs
@@ -461,9 +460,9 @@ def extend_db(req):
     }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     db_id = pdict['db_id']
     sql = " SELECT cluster_id, host,pgdata,instance_name,clup_cluster.state," \
           " db_detail->>'instance_type' as instance_type, db_detail->>'db_user' as db_user " \
@@ -506,9 +505,9 @@ def pg_reload(req):
     params = {
         'db_id': csu_http.MANDATORY
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     db_id = pdict['db_id']
     sql = "SELECT host, pgdata, db_id, db_detail->> 'db_user' as db_user, " \
           "db_detail->>'instance_type' as instance_type FROM clup_db WHERE db_id = %s"
@@ -533,18 +532,15 @@ def get_all_db_list(req):
     }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
-
+        return 400, err_msg
+    pdict = cast(dict, pdict)
     # page_num = pdict['page_num']
     page_num = pdict.setdefault('page_num', 1)
     page_size = pdict.setdefault('page_size', 10000)
 
-    if 'filter' in pdict:
-        filter_cond = pdict['filter']
-    else:
-        filter_cond = ''
+    filter_cond = pdict.get("filter", "")
 
     offset = (page_num - 1) * page_size
     # 可以的条件：cluster_name,vip
@@ -590,9 +586,9 @@ def get_all_db_list(req):
         if not row['os_user']:
             row['os_user'] = 'postgres'
         row['alarm'] = 1
-        err_code, ret = pg_helpers.get_db_room(row['db_id'])
+        err_code, err_msg, ret = pg_helpers.get_db_room(row['db_id'])
         if err_code != 0:
-            return 400, ret
+            return 400, err_msg
         row['room_name'] = ret['room_name'] if ret else '默认机房'
 
         row['switch'] = 1
@@ -612,11 +608,9 @@ def get_all_db_list(req):
         if code == 0:
             if is_run:
                 row['db_state'] = database_state.RUNNING
-            else:
+            elif row['db_state'] not in {database_state.CREATING, database_state.REPAIRING, database_state.CREATE_FAILD}:
                 # 如果状态不是处于创建中或修复中,直接显示数据库状态为停止
-                # if row['db_state'] not in database_state.get_dict() or row['db_state'] == -1:
-                if row['db_state'] not in (database_state.CREATING, database_state.REPAIRING, database_state.CREATE_FAILD):
-                    row['db_state'] = database_state.STOP
+                row['db_state'] = database_state.STOP
         else:
             # agent连接超时加到set集合中,避免重复检查造成接口太慢
             err_host_set.add(row['host'])
@@ -636,9 +630,9 @@ def get_create_db_host_list(req):
     }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     with dbapi.DBProcess() as dbp:
         sql = "SELECT count(*) as cnt FROM clup_host "
         rows = dbp.query(sql, )
@@ -695,9 +689,9 @@ def get_db_info(req):
     }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     sql = "SELECT cluster_id, db_state, host, repl_ip, pgdata, port, is_primary,db_id, instance_name, db_type," \
         "db_detail->'os_user' as os_user, db_detail->'os_uid' as os_uid, " \
         "db_detail->'pg_bin_path' as pg_bin_path, " \
@@ -727,9 +721,9 @@ def modify_db_conf(req):
         'need_sync': 0
     }
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     # 检查当前要修改的数据库是否是主库
     sql = "SELECT is_primary FROM clup_db WHERE db_id=%s"
@@ -798,9 +792,9 @@ def get_db_settings(req):
         'no_show_params': 0
     }
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     # 获取数据库内pg_settings的配置
     db_id = pdict['db_id']
@@ -834,10 +828,9 @@ def get_db_settings(req):
     # if db_state != 0:
     #     return 400, f"The database: db_id={db_id} not started, modify the parameters after starting the database."
 
-    err_code, err_msg = pg_helpers.get_all_settings(db_id, condition_dict, pg_version)
+    err_code, err_msg, all_settings_list = pg_helpers.get_all_settings(db_id, condition_dict, pg_version)
     if err_code != 0:
         return 400, err_msg
-    all_settings_list = err_msg
 
     # 分页/搜索
     filter_setting_list = all_settings_list
@@ -863,9 +856,9 @@ def get_all_setting_category(req):
     }
     try:
         # 检查参数的合法性,如果成功,把参数放到一个字典中
-        err_code, pdict = csu_http.parse_parms(params, req)
+        err_code, err_msg, pdict = csu_http.parse_parms(params, req)
         if err_code != 0:
-            return 400, pdict
+            return 400, err_msg
         db_id = pdict['db_id']
 
         # get the database information
@@ -889,11 +882,10 @@ def get_all_setting_category(req):
         #     return 400, f"The database: db_id={db_id} not started, modify the parameters after starting the database."
 
         # 获取分类
-        err_code, err_msg = pg_helpers.get_all_settings(db_id, {}, pg_version)
+        err_code, err_msg, all_settings_list = pg_helpers.get_all_settings(db_id, {}, pg_version)
         if err_code != 0:
             return 400, err_msg
 
-        all_settings_list = err_msg
         setting_category_set = set([entry['category'] for entry in all_settings_list])
         # 移除None，防止后面的sorted(list(setting_category_set))报错
         setting_category_set.remove(None)
@@ -947,25 +939,29 @@ def get_db_session(req):
         'page_size': csu_http.MANDATORY | csu_http.INT,
     }
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     db_id = pdict.get('db_id')
     if 'state' not in pdict:
         pdict['state'] = ""
     if 'backend_type' not in pdict:
         pdict['backend_type'] = ""
     if db_id:
-        err_code, conn = pg_helpers.get_db_conn(db_id)
+        err_code, err_msg, conn = pg_helpers.get_db_conn(db_id)
         if err_code != 0:
-            return 400, conn
-
-        sql = "select db_detail->'version' as version from clup_db where db_id=%s"
-        rows = dbapi.query(sql, (db_id,))
-        if len(rows) <= 0:
-            return 400, "Database does not exist!"
-        db_version = rows[0]['version']
-        db_main_version = int(db_version.split('.')[0])
+            return 400, err_msg
+        try:
+            sql = "select db_detail->'version' as version from clup_db where db_id=%s"
+            rows = dbapi.query(sql, (db_id,))
+            if len(rows) <= 0:
+                conn.close()
+                return 400, "Database does not exist!"
+            db_version = rows[0]['version']
+            db_main_version = int(db_version.split('.')[0])
+        except Exception:
+            conn.close()
+            return 400, traceback.format_exc()
     else:
         my_ip, _my_mac = helpers.get_my_ip()
         # 查看clup程序数据库的session
@@ -973,70 +969,71 @@ def get_db_session(req):
         # csumdb的db_version是12
         db_version = '12'
         db_main_version = int(db_version.split('.')[0])
+    try:
+        if db_main_version < 10:
+            hide_col_list = ['backend_type']
+        else:
+            hide_col_list = []
 
-    if db_main_version < 10:
-        hide_col_list = ['backend_type']
-    else:
-        hide_col_list = []
+        where_cond = ''
+        if db_main_version >= 10:
+            cond_name_list = ['state', 'backend_type']
+        else:  # PostgreSQL 9.X没有backend_type字段
+            cond_name_list = ['state']
 
-    where_cond = ''
-    if db_main_version >= 10:
-        cond_name_list = ['state', 'backend_type']
-    else:  # PostgreSQL 9.X没有backend_type字段
-        cond_name_list = ['state']
-
-    for cond_name in cond_name_list:
-        if cond_name in pdict:
-            str_ori_cond = pdict[cond_name]
-            cond_list = str_ori_cond.split(',')
-            # 如果内容中有单引号,则替换为\'
-            cond_list = [k.replace("'", r"\'") for k in cond_list]
-            # state中有null,需要特殊处理
-            has_null = False
-            if 'NULL' in cond_list:
-                cond_list.remove('NULL')
-                has_null = True
-            cond_list = ["'" + k.strip() + "'" for k in cond_list]
-            str_cond = ','.join(cond_list)
-            if cond_list:
-                if not where_cond:
-                    where_cond = ' WHERE '
+        for cond_name in cond_name_list:
+            if cond_name in pdict:
+                str_ori_cond = pdict[cond_name]
+                cond_list = str_ori_cond.split(',')
+                # 如果内容中有单引号,则替换为\'
+                cond_list = [k.replace("'", r"\'") for k in cond_list]
+                # state中有null,需要特殊处理
+                has_null = False
+                if 'NULL' in cond_list:
+                    cond_list.remove('NULL')
+                    has_null = True
+                cond_list = ["'" + k.strip() + "'" for k in cond_list]
+                str_cond = ','.join(cond_list)
+                if cond_list:
+                    if not where_cond:
+                        where_cond = ' WHERE '
+                    else:
+                        where_cond += ' AND '
+                    if has_null:
+                        where_cond += f'(({cond_name} in ({str_cond}) OR {cond_name} IS NULL))'
+                    else:
+                        where_cond += f'{cond_name} in ({str_cond})'
                 else:
-                    where_cond += ' AND '
-                if has_null:
-                    where_cond += f'(({cond_name} in ({str_cond}) OR {cond_name} IS NULL))'
-                else:
-                    where_cond += f'{cond_name} in ({str_cond})'
-            else:
-                if not has_null:  # 没有任何条件,跳过
-                    continue
+                    if not has_null:  # 没有任何条件,跳过
+                        continue
 
-                if not where_cond:
-                    where_cond = ' WHERE '
-                else:
-                    where_cond += ' AND '
-                where_cond += f'{cond_name} IS NULL'
+                    if not where_cond:
+                        where_cond = ' WHERE '
+                    else:
+                        where_cond += ' AND '
+                    where_cond += f'{cond_name} IS NULL'
 
-    sql = f"SELECT count(*) FROM pg_stat_activity {where_cond}"
-    rows = dao.sql_query(conn, sql)
-    total = rows[0]['count']
+        sql = f"SELECT count(*) FROM pg_stat_activity {where_cond}"
+        rows = dao.sql_query(conn, sql)
+        total = rows[0]['count']
 
-    page_num = pdict['page_num']
-    page_size = pdict['page_size']
-    offset = (page_num - 1) * page_size
+        page_num = pdict['page_num']
+        page_size = pdict['page_size']
+        offset = (page_num - 1) * page_size
 
-    # PostgreSQL 9.X 版本没有backend_type字段
-    backend_type = "" if db_main_version < 10 else ", backend_type"
+        # PostgreSQL 9.X 版本没有backend_type字段
+        backend_type = "" if db_main_version < 10 else ", backend_type"
 
-    sql = ("SELECT datid,datname,pid,usesysid, usename,application_name,client_addr, client_hostname,"
-           "client_port,date_trunc('second', backend_start)::text as backend_start,"
-           "date_trunc('second', xact_start)::text as xact_start,"
-           "date_trunc('second', query_start)::text as query_start,"
-           " date_trunc('second', state_change)::text as state_change, "
-           f"wait_event_type, wait_event,state, backend_xid, backend_xmin,query {backend_type} "
-           f" FROM pg_stat_activity {where_cond} LIMIT {page_size} OFFSET {offset}")
-    rows = dao.sql_query(conn, sql)
-    conn.close()
+        sql = ("SELECT datid,datname,pid,usesysid, usename,application_name,client_addr, client_hostname,"
+            "client_port,date_trunc('second', backend_start)::text as backend_start,"
+            "date_trunc('second', xact_start)::text as xact_start,"
+            "date_trunc('second', query_start)::text as query_start,"
+            " date_trunc('second', state_change)::text as state_change, "
+            f"wait_event_type, wait_event,state, backend_xid, backend_xmin,query {backend_type} "
+            f" FROM pg_stat_activity {where_cond} LIMIT {page_size} OFFSET {offset}")
+        rows = dao.sql_query(conn, sql)
+    finally:
+        conn.close()
     for row in rows:
         backend_start = row['backend_start']
         if backend_start:
@@ -1065,15 +1062,15 @@ def pg_cancel_backend(req):
         'db_id': 0,
         'pid': csu_http.MANDATORY
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     db_id = pdict.get('db_id')
 
     if db_id:
-        err_code, conn = pg_helpers.get_db_conn(db_id)
+        err_code, err_msg, conn = pg_helpers.get_db_conn(db_id)
         if err_code != 0:
-            return 400, conn
+            return 400, err_msg
     else:
         # 查看clup程序数据库的
         conn = dbapi.connect_db()
@@ -1093,14 +1090,14 @@ def pg_terminate_backend(req):
         'db_id': 0,
         'pid': csu_http.MANDATORY
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     db_id = pdict.get('db_id')
     if db_id:
-        err_code, conn = pg_helpers.get_db_conn(db_id)
+        err_code, err_msg, conn = pg_helpers.get_db_conn(db_id)
         if err_code != 0:
-            return 400, conn
+            return 400, err_msg
     else:
         # 查看clup程序数据库的
         conn = dbapi.connect_db()
@@ -1128,9 +1125,9 @@ def modify_db_info(req):
         'port': 0
     }
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     db_id = pdict['db_id']
     try:
@@ -1205,9 +1202,9 @@ def get_primary_db_info(req):
         'db_id': csu_http.MANDATORY,
     }
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     db_id = pdict['db_id']
     sql = "SELECT cluster_id, db_id, repl_ip as primary_repl_ip, cluster_type, clup_cluster.state as cluster_state" \
           " FROM clup_db LEFT JOIN clup_cluster USING (cluster_id) WHERE db_id = %s"
@@ -1234,13 +1231,16 @@ def get_primary_db_info(req):
     db_dict.update(cur_db)
     # 获取表空间目录
     table_space = []
+    err_code, err_msg, conn = dao.get_db_conn(db_dict)
+    if err_code != 0:
+        return 400, err_msg
     try:
-        conn = dao.get_db_conn(db_dict)
         sql = "SELECT spcname AS name, pg_catalog.pg_tablespace_location(oid) AS location FROM pg_catalog.pg_tablespace where spcname not in ('pg_default', 'pg_global');"
         table_space = dao.sql_query(conn, sql)
-        conn.close()
     except Exception as e:
         logging.error(f"get primary db info error: {repr(e)}")
+    finally:
+        conn.close()
     tblspc_dir = []
     for space in table_space:
         tblspc_dir.append({'old_dir': space['location'], 'new_dir': space['location']})
@@ -1279,9 +1279,9 @@ def build_standby(req):
         'memory_size': 0,  # 分配的内存大小,单位默认为G
     }
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     if not pdict['pgdata'].startswith('/'):
         return 400, 'The args "pgdata" is not startswith "/"'
@@ -1363,9 +1363,9 @@ def modify_db_repl_info(req):
         'repl_pass': csu_http.MANDATORY,
     }
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     # 检查该数据库是否在集群中
     db_id = pdict['db_id']
     sql = "SELECT cluster_id, db_detail->> 'db_user' as db_user  FROM clup_db WHERE db_id=%s"
@@ -1394,9 +1394,9 @@ def pg_promote(req):
     params = {
         'db_id': csu_http.MANDATORY
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     # 数据库可能在集群中,所以使用left join
     sql = "SELECT pgdata,host,is_primary,cluster_id,db_detail->>'instance_type' AS instance_type," \
           " db_detail->>'db_user' AS db_user,clup_cluster.state, clup_cluster.cluster_type  " \
@@ -1425,7 +1425,7 @@ def pg_promote(req):
         str_id_list = str(id_list)[1:-1]
         sql = f"SELECT db_id FROM clup_db WHERE cluster_id = {cluster_id} AND db_id not in ({str_id_list})"
         rows = dbapi.query(sql)
-        rows.append({'db_id': pdict['db_id']})
+        rows.append({'db_id': pdict['db_id']})  # type: ignore
 
     for row in rows:
         # 需要将当前库包括所有子节点脱离集群,当前库设为主库,上级库为空
@@ -1443,9 +1443,9 @@ def get_all_cascaded_db(req):
     params = {
         'db_id': csu_http.MANDATORY
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     db_id = pdict['db_id']
     rows = dao.get_all_cascaded_db(db_id)
     if len(rows) == 0:
@@ -1466,9 +1466,9 @@ def change_up_primary_db(req):
         'db_id': csu_http.MANDATORY,
         'up_db_id': csu_http.MANDATORY,
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     db_id = pdict['db_id']
     new_up_db = pdict['up_db_id']
     sql = "SELECT host, port FROM clup_db WHERE db_id= %s"
@@ -1536,10 +1536,12 @@ def renew_pg_bin_info(req):
     params = {
         "db_id": csu_http.MANDATORY
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
-    err_code, err_msg = pg_helpers.renew_pg_bin_info(pdict['db_id'])
+        return 400, err_msg
+    pdict = cast(dict, pdict)
+
+    err_code, err_msg, _ = pg_helpers.renew_pg_bin_info(pdict['db_id'])
     if err_code != 0:
         return 400, err_msg
     return 200, 'OK'
@@ -1550,9 +1552,9 @@ def get_init_db_conf(req):
         'version': csu_http.MANDATORY,
         "db_type": 0,
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     # 只取两位,如9.3.5,取9.3
     version = pdict['version']
@@ -1584,28 +1586,26 @@ def get_init_db_conf(req):
         row["common_level"] = name_common_level_dict[setting_name]
         # 给提示添加值的范围
         min_val = row['min_val']
-        if ('e+' in min_val or '.' in min_val) or row['setting_type'] not in [3, 4]:
+        if ('e+' in min_val or '.' in min_val) or row['setting_type'] not in {3, 4}:
             str_min_val = min_val
+        elif row['setting_type'] == 3:
+            str_min_val = pg_helpers.pretty_size(int(min_val))
+        elif row['setting_type'] == 4:
+            str_min_val = pg_helpers.pretty_ms(int(min_val))
         else:
-            if row['setting_type'] == 3:
-                str_min_val = pg_helpers.pretty_size(int(min_val))
-            elif row['setting_type'] == 4:
-                str_min_val = pg_helpers.pretty_ms(int(min_val))
-            else:
-                str_min_val = min_val
+            str_min_val = min_val
         if not str_min_val:
             str_min_val = '-∞'
 
         max_val = row['max_val']
-        if ('e+' in max_val or '.' in max_val) or row['setting_type'] not in [3, 4]:
+        if ('e+' in max_val or '.' in max_val) or row['setting_type'] not in {3, 4}:
             str_max_val = max_val
+        elif row['setting_type'] == 3:
+            str_max_val = pg_helpers.pretty_size(int(max_val))
+        elif row['setting_type'] == 4:
+            str_max_val = pg_helpers.pretty_ms(int(max_val))
         else:
-            if row['setting_type'] == 3:
-                str_max_val = pg_helpers.pretty_size(int(max_val))
-            elif row['setting_type'] == 4:
-                str_max_val = pg_helpers.pretty_ms(int(max_val))
-            else:
-                str_max_val = max_val
+            str_max_val = max_val
         if not str_max_val:
             str_max_val = '∞'
         str_range = f'[{str_min_val}, {str_max_val}]'
@@ -1620,15 +1620,15 @@ def get_db_lock_info(req):
         'page_num': csu_http.MANDATORY | csu_http.INT,
         'page_size': csu_http.MANDATORY | csu_http.INT
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     db_id = pdict.get('db_id')
     if db_id:
-        err_code, conn = pg_helpers.get_db_conn(db_id)
+        err_code, err_msg, conn = pg_helpers.get_db_conn(db_id)
         if err_code != 0:
-            return 400, conn
+            return 400, err_msg
     else:
         # 查看clup程序数据库的
         my_ip, _my_mac = helpers.get_my_ip()
@@ -1685,9 +1685,9 @@ def check_is_pg_bin_path(req):
         "host": csu_http.MANDATORY,
         "pg_bin_path": csu_http.MANDATORY,
     }
-    code_msg, pdict = csu_http.parse_parms(param, req)
-    if code_msg != 0:
-        return 400, pdict
+    err_code, err_msg, pdict = csu_http.parse_parms(param, req)
+    if err_code != 0:
+        return 400, err_msg
 
     host = pdict['host']
     pg_bin_path = pdict['pg_bin_path']
@@ -1716,9 +1716,9 @@ def get_pg_bin_path_list(req):
     param = {
         "host": csu_http.MANDATORY,
     }
-    code_msg, pdict = csu_http.parse_parms(param, req)
-    if code_msg != 0:
-        return 400, pdict
+    err_code, err_msg, pdict = csu_http.parse_parms(param, req)
+    if err_msg != 0:
+        return 400, err_msg
     host = pdict['host']
     try:
         sql = "SELECT content FROM clup_settings WHERE key='pg_bin_path_string' "
@@ -1763,9 +1763,9 @@ def get_pg_bin_version(req):
         "host": csu_http.MANDATORY,
         "pg_bin_path": csu_http.MANDATORY,
     }
-    code_msg, pdict = csu_http.parse_parms(param, req)
-    if code_msg != 0:
-        return 400, pdict
+    err_code, err_msg, pdict = csu_http.parse_parms(param, req)
+    if err_msg != 0:
+        return 400, err_msg
     host = pdict['host']
     pg_bin_path = pdict['pg_bin_path']
     err_code, err_msg = rpc_utils.get_rpc_connect(host)
@@ -1791,9 +1791,9 @@ def check_pg_extensions_is_installed(req):
         "pg_bin_path": csu_http.MANDATORY,
         "pg_extension_list": csu_http.MANDATORY,
     }
-    code_msg, pdict = csu_http.parse_parms(param, req)
-    if code_msg != 0:
-        return 400, pdict
+    err_code, err_msg, pdict = csu_http.parse_parms(param, req)
+    if err_code != 0:
+        return 400, err_msg
 
     host = pdict['host']
     pg_bin_path = pdict['pg_bin_path']
@@ -1831,9 +1831,9 @@ def check_the_dir_is_empty(req):
         "host": csu_http.MANDATORY,
         "pgdata": csu_http.MANDATORY
     }
-    code_msg, pdict = csu_http.parse_parms(param, req)
-    if code_msg != 0:
-        return 400, pdict
+    err_code, err_msg, pdict = csu_http.parse_parms(param, req)
+    if err_code != 0:
+        return 400, err_msg
     host = pdict.get('host', '')
     pgdata = pdict.get('pgdata', '')
     try:
@@ -1865,9 +1865,9 @@ def check_pgdata_is_used(req):
         "host": csu_http.MANDATORY,
         "pgdata": csu_http.MANDATORY
     }
-    code_msg, pdict = csu_http.parse_parms(param, req)
-    if code_msg != 0:
-        return 400, pdict
+    err_code, err_msg, pdict = csu_http.parse_parms(param, req)
+    if err_code != 0:
+        return 400, err_msg
     host = pdict.get('host', '')
     pgdata = pdict.get('pgdata', '')
     try:
@@ -1900,9 +1900,9 @@ def build_polar_reader(req):
         'delay': 0,
     }
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     if not pdict['pgdata'].startswith('/'):
         return 400, 'The args "pgdata" is not startswith "/"'
@@ -1936,9 +1936,9 @@ def build_polar_standby(req):
         'delay': 0,
     }
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     if not pdict['pgdata'].startswith('/'):
         return 400, 'The args "pgdata" is not startswith "/"'
@@ -1958,9 +1958,9 @@ def get_pfs_info(req):
         'db_id': csu_http.MANDATORY
     }
 
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     # get the disk info
     result = polar_lib.get_db_pfs_info(pdict['db_id'])
@@ -2002,9 +2002,9 @@ def pfs_growfs(req):
         "target_chunks": csu_http.INT
     }
 
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     # get the db infor by db_id
     rows = dao.get_db_info(pdict['db_id'])
@@ -2035,9 +2035,9 @@ def modify_vip_on_host(req):
         "option": csu_http.INT
     }
     # check request params
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     vip = pdict["vip"]
     host = pdict["host"]
@@ -2059,7 +2059,7 @@ def modify_vip_on_host(req):
         sql = "SELECT c.cluster_id, state, cluster_data->>'cluster_name' as cluster_name " \
             " FROM clup_used_vip v,clup_cluster c WHERE vip=%s AND c.cluster_id=v.cluster_id"
         rows = dbapi.query(sql, (vip, ))
-        if rows and rows[0]['state'] not in [cluster_state.FAILED, cluster_state.OFFLINE]:
+        if rows and rows[0]['state'] not in {cluster_state.FAILED, cluster_state.OFFLINE}:
             cluster_id = rows[0]["cluster_id"]
             cluster_name = rows[0]["cluster_name"]
             return 400, f"The cluster({cluster_id}:{cluster_name}) state is not OFFLINE or FAILED,cant remove vip from host."
@@ -2086,63 +2086,63 @@ def get_db_pg_hba(req):
     }
 
     # check request params
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
+    pdict = cast(dict, pdict)
 
     try:
         # get the db info
         db_conn_info = dao.get_db_conn_info(pdict['db_id'])
         if not db_conn_info:
             return 400, f"Cant find any records for db_id={pdict['db_id']}."
-
         # connect the database
-        db_conn = dao.get_db_conn(db_conn_info)
-        if isinstance(db_conn, str):
-            return 400, db_conn
+        err_code, err_msg, db_conn = dao.get_db_conn(db_conn_info)
+        if err_code != 0:
+            return 400, err_msg
     except Exception as e:
         return 400, f"Connect the database with unexpected error, {str(e)}."
 
-    # search infor from pg_hba_file_rules
-    offset = (pdict['page_num'] - 1) * pdict['page_size']
-    code, ret_list = pg_helpers.get_pg_hba(pdict['db_id'], db_conn, offset, pdict['page_size'])
-    if code != 0:
-        return 400, ret_list
-
     try:
-        # check and get the ident info
-        ident_content_list = list()
-        for hba_row in ret_list:
-            if hba_row["options"] and "map=" in hba_row["options"][0]:
-                map_user = hba_row["options"][0].split("map=")[-1].strip()
-                if not ident_content_list:
-                    code, result = pg_helpers.get_pg_ident(db_conn, db_conn_info["host"])
-                    if code != 0:
-                        # if not get the content,no care
-                        continue
-                    ident_content_list = result
+        # search infor from pg_hba_file_rules
+        offset = (pdict['page_num'] - 1) * pdict['page_size']
+        code, msg, ret_list = pg_helpers.get_pg_hba(pdict['db_id'], db_conn, offset, pdict['page_size'])
+        if code != 0:
+            return 400, msg
 
-                for ident_content in ident_content_list:
-                    if map_user in ident_content:
-                        hba_row["pg_ident"] = ident_content.split()
-    except Exception as e:
-        return 400, f"Get the pg_ident information with unexpected error, {str(e)}."
+        try:
+            # check and get the ident info
+            ident_content_list = list()
+            for hba_row in ret_list:
+                if hba_row["options"] and "map=" in hba_row["options"][0]:  # type: ignore
+                    map_user = hba_row["options"][0].split("map=")[-1].strip()  # type: ignore
+                    if not ident_content_list:
+                        code, result = pg_helpers.get_pg_ident(db_conn, db_conn_info["host"])
+                        if code != 0:
+                            # if not get the content,no care
+                            continue
+                        ident_content_list = result
 
-    # query database names and user names from the database
-    code, db_names = pg_helpers.get_db_names(db_conn)
-    if code != 0:
-        return 400, db_names
-    code, user_names = pg_helpers.get_user_names(db_conn)
-    if code != 0:
-        return 400, user_names
-    # close the db_conn
-    if db_conn:
+                    for ident_content in ident_content_list:
+                        if map_user in ident_content:
+                            hba_row["pg_ident"] = ident_content.split()  # type: ignore
+        except Exception as e:
+            return 400, f"Get the pg_ident information with unexpected error, {str(e)}."
+
+        # query database names and user names from the database
+        code, db_names = pg_helpers.get_db_names(db_conn)
+        if code != 0:
+            return 400, db_names
+        code, user_names = pg_helpers.get_user_names(db_conn)
+        if code != 0:
+            return 400, user_names
+    finally:
         db_conn.close()
 
     ret_dict = {
         "pg_hba_rules": ret_list,
-        "db_names": [row['datname'] for row in db_names],
-        "user_names": [row['usename'] for row in user_names],
+        "db_names": [row['datname'] for row in db_names],  # type: ignore
+        "user_names": [row['usename'] for row in user_names],  # type: ignore
         "total": len(ret_list)
     }
 
@@ -2159,9 +2159,9 @@ def delete_one_pg_hba(req):
     }
 
     # check request params
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     # get the database infor
     sql = "SELECT host, pgdata FROM clup_db WHERE db_id=%s"
@@ -2191,9 +2191,9 @@ def update_pg_hba(req):
     }
 
     # check request params
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     # update pg_hba
     code, result = pg_helpers.update_pg_hba(pdict, option=pdict["option"])
@@ -2214,9 +2214,9 @@ def get_history_hba(req):
     }
 
     # check request params
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     # get the db info
     sql = "SELECT pgdata, host FROM clup_db WHERE db_id=%s"
@@ -2260,9 +2260,9 @@ def get_hba_history_content(req):
     }
 
     # check request params
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     # get the database info
     sql = "SELECT pgdata, host FROM clup_db WHERE db_id=%s"
@@ -2302,9 +2302,10 @@ def get_pg_log_file_list(req):
     }
 
     # check request params
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
+    pdict = cast(dict, pdict)
 
     # get the db_info
     sql = "SELECT host, pgdata FROM clup_db WHERE db_id = %s"
@@ -2329,14 +2330,18 @@ def get_pg_log_file_list(req):
         # if can connect the database,get log_info from pg_settings,else read from conf files
         if db_conn_info:
             # connect the database
-            db_conn = dao.get_db_conn(db_conn_info)
-            if not isinstance(db_conn, str):
+            err_code, err_msg, db_conn = dao.get_db_conn(db_conn_info)
+            if err_code != 0:
+                return 400, err_msg
+            try:
                 # get the log_info
                 sql = "SELECT name, setting FROM pg_settings WHERE name in ('log_directory', 'log_destination', 'data_directory')"
                 rows = dao.sql_query(db_conn, sql)
                 if not rows:
                     return 400, f"Execute sql({sql}) failed."
                 log_info = {row["name"]: row["setting"] for row in rows}
+            finally:
+                db_conn.close()
 
         if not log_info:
             pgdata = db_info['pgdata']
@@ -2427,9 +2432,9 @@ def get_pg_log_content(req):
     }
 
     # check request params
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     # get the db_info
     sql = "SELECT host, pgdata FROM clup_db WHERE db_id=%s"
@@ -2486,9 +2491,9 @@ def get_sync_repl_delay(req):
     }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     cluster_id = pdict['cluster_id']
 
     err_code, data = ha_mgr_get_repl_delay(cluster_id)
@@ -2520,13 +2525,13 @@ def get_child_node(req):
         'db_id': csu_http.INT
     }
 
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
-    code, result = pg_helpers.get_child_node(pdict['db_id'])
+    code, msg, result = pg_helpers.get_child_node(pdict['db_id'])
     if code != 0:
-        return 400, result
+        return 400, msg
 
     return 200, json.dumps({"rows": result})
 
@@ -2540,9 +2545,9 @@ def enable_standby_sync(req):
         'node_number': 0,
     }
 
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     code, result = pg_helpers.enable_standby_sync(pdict)
     if code != 0:
@@ -2556,9 +2561,9 @@ def disable_standby_sync(req):
         'db_id': csu_http.INT
     }
 
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     # reset setting
     code, result = pg_helpers.disable_standby_sync(pdict['db_id'])

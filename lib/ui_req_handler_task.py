@@ -25,7 +25,6 @@
 import json
 
 import csu_http  # pylint: disable=import-error
-
 import general_task_mgr
 
 
@@ -37,19 +36,14 @@ def get_general_task_log(req):
     }
 
     # 检查参数的合法性，如果成功，把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     task_id = pdict['task_id']
-    if 'get_task_state' in pdict:
-        get_task_state = pdict['get_task_state']
-    else:
-        get_task_state = 0
-    if 'seq' in pdict:
-        seq = pdict['seq']
-    else:
-        seq = 0
-    err_code, state, data = general_task_mgr.get_task_log(task_id, get_task_state, seq)
+    get_task_state = pdict.get('get_task_state', 0)
+    seq = pdict.get('seq', 0)
+    b_get_task_state = bool(get_task_state)
+    err_code, state, data = general_task_mgr.get_task_log(task_id, b_get_task_state, seq)
     if err_code > 0:
         return 400, data
     elif err_code < 0:
@@ -74,9 +68,9 @@ def get_general_task_list(req):
               }
 
     # 检查参数的合法性，如果成功，把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     page_num = pdict['page_num']
     page_size = pdict['page_size']
@@ -100,9 +94,9 @@ def get_task_type_list_by_class(req):
     }
 
     # 检查参数的合法性，如果成功，把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     task_type_list = general_task_mgr.get_task_type_list_by_class(pdict['task_class'])
     return 200, json.dumps(task_type_list)
@@ -115,9 +109,9 @@ def get_general_task_state(req):
     params = {
         'task_id': csu_http.MANDATORY | csu_http.INT,
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     try:
         task_id = pdict['task_id']
         err_code, state = general_task_mgr.get_general_task_state(task_id)

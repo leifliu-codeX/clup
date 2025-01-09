@@ -22,19 +22,21 @@
 @description: rpc调用的模块
 """
 
-import os
-import sys
-import time
-import queue
+import contextlib
 import errno
 import fcntl
+import logging
+import os
 import pickle
+import queue
 import select
 import socket
 import struct
-import logging
+import sys
 import threading
+import time
 import traceback
+from typing import Any, cast
 
 import cs_low_trans
 
@@ -47,7 +49,6 @@ CMD_FUNC_LIST = 100
 # 调用服务端的某个服务
 CMD_CALL_FUNC = 200
 
-#
 DEBUG_LOG_MAX_LEN = 8192
 
 
@@ -231,10 +232,8 @@ def _handler_connect(sock, srv_obj):
             traceback.print_exc()
             break
 
-    try:
+    with contextlib.suppress(Exception):
         sock.close()
-    except Exception:
-        pass
 
 
 def parse_connect_url(conn_url):
@@ -257,8 +256,8 @@ def parse_connect_url(conn_url):
 
     try:
         ip = socket.gethostbyname(cells[0])
-    except socket.gaierror:
-        raise Exception(f"Invalid server or ip addr in url: {conn_url}.")
+    except socket.gaierror as wrong:
+        raise Exception(f"Invalid server or ip addr in url: {conn_url}.") from wrong
 
     if not cells[1].isdigit():
         raise Exception("Invalid port in connect url:%s" % cells[1])
@@ -336,7 +335,7 @@ class Server:
             except select.error as e:
                 if e.args[0] == errno.EINTR:  # 这是收到信号打断了select函数
                     continue
-                raise Exception("call select() failed: %s" % repr(e))
+                raise Exception("call select() failed: %s" % repr(e)) from e
             (client, _address) = self.ss.accept()
             # if self.debug:
             #    print("Accept connection from %s" % str(address))
@@ -377,6 +376,8 @@ class _Trans:
     """
     传输对象，把socket对象封装进来
     """
+    ip: str = ''
+    port: int = 0
 
     def __init__(self, sock, call_timeout, ip, port, msg_callback=None):
         self.sock = sock
@@ -439,11 +440,11 @@ class _AsyncCallTask(threading.Thread):
             if err:
                 raise RunError(result)
             return result
-        except queue.Empty:
-            raise CsuTimeoutError("Timeout: unable to obtain results within %s seconds" % timeout)
+        except queue.Empty as wrong:
+            raise CsuTimeoutError(f"Timeout: unable to obtain results within {timeout} seconds") from wrong
 
 
-def call_remote_func(trans, func_name, *args, **kwargs):
+def call_remote_func(trans, func_name, *args, **kwargs) -> Any:
     """
     调用远程的函数
     :param trans:
@@ -484,7 +485,7 @@ def call_remote_func(trans, func_name, *args, **kwargs):
         try:
             data = pickle.dumps([func_name, args, kwargs])
         except Exception as e:
-            raise UserWarning(f"unsupport args type: {repr(e)}")
+            raise UserWarning(f"unsupport args type: {repr(e)}") from e
         err, msg, ret_code, ret_data = cs_low_trans.send_cmd(sock, CMD_CALL_FUNC, data, call_timeout)
         if err:
             raise UserWarning(f"socket error: {msg}")
@@ -516,7 +517,7 @@ class Client:
     """
 
     def __init__(self, call_timeout=300, msg_callback=None):
-        self.trans = _Trans(sock=None, call_timeout=call_timeout, ip=None, port=None, msg_callback=msg_callback)
+        self.trans: _Trans = _Trans(sock=None, call_timeout=call_timeout, ip=None, port=None, msg_callback=msg_callback)
         self.mutex = threading.Lock()
         self.conn_timeout = 300
         self.msg_callback = msg_callback
@@ -537,10 +538,10 @@ class Client:
             raise Exception("Unsupported protocol:%s" % protocol)
         self.trans.ip = ip
         self.trans.port = port
-        err, msg, self.trans.sock = cs_low_trans.connect(ip, port, password, conn_timeout, data_timeout)
+        err, msg, mysock = cs_low_trans.connect(ip, port, password, conn_timeout, data_timeout)
         if err:
             raise Exception(msg)
-
+        self.trans.sock = cast(socket.socket, mysock)
         err, msg, ret_code, ret_data = cs_low_trans.send_cmd(self.trans.sock, CMD_FUNC_LIST, b'', data_timeout)
         if err:
             raise Exception("socket error: %s" % msg)
@@ -560,7 +561,7 @@ class Client:
             self.trans.sock.close()
             self.sock = None
 
-    def __nonzero__(self):
+    def __bool__(self):
         return True
 
     def __call__(self, method, *args, **kwargs):
@@ -617,7 +618,7 @@ def main():
     if sys.argv[1] == '-h' or sys.argv[1] == '--help':
         _usage()
         return
-    if sys.argv[1] not in ['-s', '-c']:
+    if sys.argv[1] not in {'-s', '-c'}:
         _usage()
         return
 

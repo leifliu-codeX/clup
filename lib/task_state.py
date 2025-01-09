@@ -39,7 +39,4 @@ def to_str(state):
 
 def is_valid(state):
     global __ALL_STATE
-    if state in __ALL_STATE:
-        return True
-    else:
-        return False
+    return state in __ALL_STATE

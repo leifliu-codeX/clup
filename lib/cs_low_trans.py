@@ -29,7 +29,7 @@ import select
 import socket
 import struct
 import time
-from typing import Tuple
+from typing import Tuple, Union
 
 # 在底层的命令中，都发送这个前缀，如果发现收到的包不是这几个字，则表明不是csrpc的的调用
 magic = b'UHSGNEHCCPR'
@@ -38,7 +38,7 @@ magic_len = len(magic)
 CMD_AUTH = 0
 
 
-def send_data(sock: socket, data: bytes, timeout: int) -> Tuple[int, str]:
+def send_data(sock: socket.socket, data: bytes, timeout: int) -> Tuple[int, str]:
     """
     发送数据，会把所有的数据发送完
     :param sock    : socket对象
@@ -70,7 +70,7 @@ def send_data(sock: socket, data: bytes, timeout: int) -> Tuple[int, str]:
     return 0, ''
 
 
-def recv_data(sock: socket, need_len: int, timeout: int) -> Tuple[int, str, bytes]:
+def recv_data(sock: socket.socket, need_len: int, timeout: int) -> Tuple[int, str, bytes]:
     """
     接收数据，直到接收到指定长度的数据才会返回
     :param sock    : socket对象
@@ -106,7 +106,7 @@ def recv_data(sock: socket, need_len: int, timeout: int) -> Tuple[int, str, byte
     return 0, '', data
 
 
-def send_cmd(sock: socket, cmd: int, data: bytes, timeout: int) -> Tuple[int, str, int, bytes]:
+def send_cmd(sock: socket.socket, cmd: int, data: bytes, timeout: int) -> Tuple[int, str, int, bytes]:
     """
     发送命令
     :param sock    : socket对象
@@ -133,7 +133,7 @@ def send_cmd(sock: socket, cmd: int, data: bytes, timeout: int) -> Tuple[int, st
     fmt = "!%dsiI" % magic_len
     recv_magic, ret_code, data_len, = struct.unpack(fmt, raw)
     if recv_magic != magic:
-        return -2, 'Invalid packet format!', -1, ''
+        return -2, 'Invalid packet format!', -1, b''
     if data_len > 0:
         err, msg, raw = recv_data(sock, data_len, 2)
         if err:
@@ -143,7 +143,7 @@ def send_cmd(sock: socket, cmd: int, data: bytes, timeout: int) -> Tuple[int, st
     return 0, '', ret_code, raw
 
 
-def recv_cmd(sock: socket, timeout: int) -> Tuple[int, str, int, bytes]:
+def recv_cmd(sock: socket.socket, timeout: int) -> Tuple[int, str, int, bytes]:
     """
     接收命令
     :param sock    : socket对象
@@ -161,7 +161,7 @@ def recv_cmd(sock: socket, timeout: int) -> Tuple[int, str, int, bytes]:
     fmt = "!%dsiI" % magic_len
     recv_magic, cmd, len_data, = struct.unpack(fmt, raw)
     if recv_magic != magic:
-        return -2, 'Invalid packet format!', ''
+        return -2, 'Invalid packet format!', -1, b''
 
     if len_data > 0:
         err, msg, raw = recv_data(sock, len_data, timeout)
@@ -172,7 +172,7 @@ def recv_cmd(sock: socket, timeout: int) -> Tuple[int, str, int, bytes]:
         return 0, '', cmd, b''
 
 
-def reply_cmd(sock: socket, ret_code: int, ret_data: bytes, timeout: int) -> Tuple[int, str]:
+def reply_cmd(sock: socket.socket, ret_code: int, ret_data: bytes, timeout: int) -> Tuple[int, str]:
     """
     接收到命令之后，返回响应
     :param sock     : socket对象
@@ -197,7 +197,7 @@ def reply_cmd(sock: socket, ret_code: int, ret_data: bytes, timeout: int) -> Tup
     return err, msg
 
 
-def connect(ip: str, port: int, password: str, conn_timeout: int, data_timeout: int) -> Tuple[int, str, object]:
+def connect(ip: str, port: int, password: str, conn_timeout: int, data_timeout: int) -> Tuple[int, str, Union[socket.socket, None]]:
     """
     客户端连接服务端进行验证
     :param ip: 服务的ip地址
@@ -235,11 +235,11 @@ def connect(ip: str, port: int, password: str, conn_timeout: int, data_timeout: 
     # print "ret_code", ret_code, "ret_data", ret_data, "sock", sock
     if ret_code:
         sock.close()
-        return ret_code, ret_data, None
+        return ret_code, ret_data.decode(), None
     return 0, '', sock
 
 
-def auth_connect(sock: socket, ha_pwd: str, timeout: int) -> Tuple[int, str]:
+def auth_connect(sock: socket.socket, ha_pwd: str, timeout: int) -> Tuple[int, str]:
     """
     服务端验证连接，方法为: 当接后客户端的连接后，马上给客户端返回一个随机字段串random_str，客户端收到这个随机字符串后，用自己的密码与这个
     随机字符串混合后做一个hash运算(sha256)，然后把运算后的字符串(client_hash_str)发送给服务端，服务端也把之前生成的随机字符串和自己本

@@ -27,6 +27,7 @@ import logging
 import os
 import sys
 import time
+from typing import Any, cast
 
 import auto_upgrade
 import config
@@ -45,8 +46,6 @@ import ui_req_handler_db
 import ui_req_handler_ha
 import ui_req_handler_host
 import ui_req_handler_task
-# import ui_req_handler_zqpool
-# import ui_req_handler_tools
 import version
 
 exit_flag = 0
@@ -54,13 +53,14 @@ exit_flag = 0
 
 def check_env():
     # 检查psql命令是否存在
-    psql_cmd = config.get('psql_cmd')
+    psql_cmd = config.get('psql_cmd', '')
+    psql_cmd = cast(str, psql_cmd)
     if not os.path.exists(psql_cmd):
         logging.fatal(f"Can not find psql({psql_cmd}), please check psql_cmd in config!")
         sys.exit(-1)
 
 
-def gen_http_handler(obj: object) -> dict:
+def gen_http_handler(obj: Any) -> dict:
     """
     :param obj:
     :return:
@@ -265,7 +265,7 @@ def main():
         sys.stderr.write("Unknown loglevel: " + args.loglevel)
         sys.exit(-1)
 
-    if sys.argv[1] in ['start', 'status', 'reg_service']:
+    if sys.argv[1] in {'start', 'status', 'reg_service'}:
         logging.info(version.copyright_message())
 
     # 初使用化日志

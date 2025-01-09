@@ -29,6 +29,7 @@ import os
 import time
 import traceback
 from ipaddress import IPv4Address, IPv4Network
+from typing import cast
 
 import cluster_state
 import csu_http
@@ -57,17 +58,15 @@ def get_cluster_list(req):
     }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
+    pdict = cast(dict, pdict)
 
     page_num = pdict['page_num']
     page_size = pdict['page_size']
 
-    if 'filter' in pdict:
-        filter_cond = pdict['filter']
-    else:
-        filter_cond = ''
+    filter_cond = pdict.get('filter', '')
 
     offset = (page_num - 1) * page_size
     # 可以的条件：cluster_name,vip
@@ -108,9 +107,10 @@ def get_cluster_detail(req):
     }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
+    pdict = cast(dict, pdict)
 
     cluster_id = pdict['cluster_id']
 
@@ -175,9 +175,10 @@ def get_cluster_db_list(req):
     }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
+    pdict = cast(dict, pdict)
 
     cluster_id = pdict['cluster_id']
 
@@ -207,9 +208,9 @@ def get_cluster_db_list(req):
         if host_data_dict:
             db_dict['hid'] = host_data_dict[db_dict['host']]
         db_state = db_dict['db_state']
-        err_code, ret = pg_helpers.get_db_room(db_dict['db_id'])
+        err_code, err_msg, ret = pg_helpers.get_db_room(db_dict['db_id'])
         if err_code != 0:
-            return 400, ret
+            return 400, err_msg
         # db_dict['room_name'] = ret['room_name'] if ret else '默认机房'
         if ret:
             db_dict.update(ret)
@@ -228,13 +229,11 @@ def get_cluster_db_list(req):
             err_code, is_run = pg_db_lib.is_running(rpc, db_dict['pgdata'])
             if err_code != 0:
                 db_state = database_state.FAULT
-            else:
-                if is_run:
-                    db_state = database_state.RUNNING
-                else:
-                    # 如果状态不是处于创建中或修复中,直接显示数据库状态为停止
-                    if db_state not in (database_state.CREATING, database_state.REPAIRING, database_state.CREATE_FAILD):
-                        db_state = database_state.STOP
+            elif is_run:
+                db_state = database_state.RUNNING
+            elif db_state not in {database_state.CREATING, database_state.REPAIRING, database_state.CREATE_FAILD}:
+                # 如果状态不是处于创建中或修复中,直接显示数据库状态为停止
+                db_state = database_state.STOP
 
             db_dict['db_state'] = db_state
             dao.update_db_state(db_dict['db_id'], db_dict['db_state'])
@@ -249,9 +248,10 @@ def get_cluster_db_info_api(req):
     params = {
         "cluster_id": csu_http.MANDATORY,
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
+    pdict = cast(dict, pdict)
 
     cluster_id = pdict['cluster_id']
     try:
@@ -262,7 +262,7 @@ def get_cluster_db_info_api(req):
     except Exception as e:
         return 400, repr(e)
     for row in rows:
-        err_code, n = pg_helpers.get_db_room(row['db_id'])
+        err_code, _err_msg, n = pg_helpers.get_db_room(row['db_id'])
         row['state'] = node_state.to_str(row['state'])
         row['up_db_id'] = row["up_db_id"] if row['up_db_id'] else " "
         row['instance_name'] = row["instance_name"] if row['instance_name'] else " "
@@ -291,9 +291,9 @@ def get_cluster_list_api(req):
     """
     params = {
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, _pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     sql = "SELECT cluster_id, cluster_data->'cluster_name' as cluster_name," \
           "state, cluster_type, cluster_data->'vip' as vip FROM clup_cluster"
     rows = dbapi.query(sql)
@@ -317,9 +317,10 @@ def get_cluster_host_list(req):
     }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
+    pdict = cast(dict, pdict)
 
     cluster_id = pdict['cluster_id']
 
@@ -364,29 +365,26 @@ def get_cluster_host_list(req):
                 check_err_code, check_result = rpc.check_is_mount(_mount_path)
                 if check_err_code != 0:
                     row["mount_state"] = "未知"
+                elif check_result:
+                    row["mount_state"] = "已挂载"
                 else:
-                    if check_result:
-                        row["mount_state"] = "已挂载"
-                    else:
-                        row["mount_state"] = "未挂载"
+                    row["mount_state"] = "未挂载"
             # 这里修改下逻辑,如果vip未绑定到主库,则将其绑定到主库上
             err_code, ret = rpc.vip_exists(vip)
             if err_code != 0:
                 row['vip_state'] = '未知'
+            elif ret:
+                row['vip_state'] = '运行'
             else:
-                if ret:
-                    row['vip_state'] = '运行'
-                else:
-                    row['vip_state'] = '无'
+                row['vip_state'] = '无'
 
             err_code, ret = pg_db_lib.is_running(rpc, pgdata)
             if err_code != 0:
                 row['vip_state'] = '未知'
+            elif ret:
+                row['db_state'] = '运行'
             else:
-                if ret:
-                    row['db_state'] = '运行'
-                else:
-                    row['db_state'] = '无'
+                row['db_state'] = '无'
 
         finally:
             if rpc:
@@ -412,9 +410,10 @@ def delete_cluster(req):
     }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
+    pdict = cast(dict, pdict)
 
     cluster_id = pdict['cluster_id']
     try:
@@ -473,9 +472,10 @@ def modify_sr_cluster_info(req):
     }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
+    pdict = cast(dict, pdict)
 
     cluster_id = pdict['cluster_id']
     attr_dict = copy.copy(pdict)
@@ -527,10 +527,13 @@ def modify_sr_cluster_info(req):
 
         rooms = cluster_dict.get('rooms', {})
         cluster_dict.update(attr_dict)
-        cur_room_info = pg_helpers.get_current_cluster_room(cluster_id)
+        err_code, err_msg, cur_room_info = pg_helpers.get_current_cluster_room(cluster_id)
+        if err_code != 0:
+            return 400, err_msg
+
         if cur_room_info:
             for k, v in attr_dict.items():
-                if k in cur_room_info.keys():
+                if k in cur_room_info:
                     cur_room_info[k] = v
             room_id = cur_room_info.pop('room_id', '0')
             rooms[str(room_id)] = {
@@ -554,9 +557,10 @@ def add_sr_cluster_room_info(req):
         'room_info': csu_http.MANDATORY
     }
 
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
+    pdict = cast(dict, pdict)
 
     # check the vip is in the vip pool
     pool_id = pdict['pool_id']
@@ -601,9 +605,10 @@ def update_sr_cluster_room_info(req):
         'room_info': csu_http.MANDATORY
     }
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
+    pdict = cast(dict, pdict)
 
     # check the vip is in the vip pool
     pool_id = pdict['pool_id']
@@ -666,9 +671,10 @@ def get_sr_cluster_room_info(req):
         'cluster_id': csu_http.MANDATORY | csu_http.INT,
     }
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
+    pdict = cast(dict, pdict)
 
     cluster_id = pdict['cluster_id']
     sql = "SELECT cluster_data FROM clup_cluster WHERE cluster_id=%s"
@@ -676,16 +682,16 @@ def get_sr_cluster_room_info(req):
     if not rows:
         return 400, f'Cluster(cluster_id: {cluster_id}) information not found'
     cluster_data = rows[0]['cluster_data']
-    room_info = cluster_data.get('rooms', {})
+    rooms_info = cluster_data.get('rooms', {})
     default_room = {
         'vip': cluster_data['vip'],
         'room_name': '默认机房',
         'room_use_state': 0
     }
-    room_info = {'0': default_room} if not room_info else room_info
+    rooms_info = rooms_info if rooms_info else {'0': default_room}
     cluster_db_list = dao.get_cluster_db_list(cluster_id)
     room_info_list = []
-    for room_id, room_info in room_info.items():
+    for room_id, room_info in rooms_info.items():
         if not room_info:
             room_info.update(default_room)
         room_info['room_id'] = room_id
@@ -722,9 +728,11 @@ def get_switch_log_api(req):
         'task_id': csu_http.MANDATORY | csu_http.INT,
     }
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
+    pdict = cast(dict, pdict)
+
     try:
         sql = "SELECT create_time, log FROM task_log WHERE task_id=%s"
         rows = dbapi.query(sql, (pdict['task_id'], ))
@@ -745,9 +753,11 @@ def delete_sr_cluster_room_info(req):
         'cluster_id': csu_http.MANDATORY | csu_http.INT,
         'room_id': csu_http.MANDATORY,
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
+    pdict = cast(dict, pdict)
+
     cluster_id = pdict['cluster_id']
     room_id = pdict['room_id']
 
@@ -786,9 +796,11 @@ def remove_db_from_cluster(req):
     }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
+    pdict = cast(dict, pdict)
+
     sql = "SELECT host, port, cluster_data->'cluster_name' as cluster_name FROM" \
           " clup_db INNER JOIN clup_cluster USING (cluster_id) WHERE db_id=%s"
     rows = dbapi.query(sql, (pdict['db_id'], ))
@@ -820,9 +832,10 @@ def modify_db_in_cluster(req):
     }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
+    pdict = cast(dict, pdict)
 
     cluster_id = pdict['cluster_id']
     db_id = pdict['db_id']
@@ -837,7 +850,7 @@ def modify_db_in_cluster(req):
         'room_id': db_dict.pop('room_id', '0'),
         'reset_cmd': db_dict.get('reset_cmd', '')
     }
-    if 'reset_cmd' in db_dict.keys():
+    if 'reset_cmd' in db_dict:
         del db_dict['reset_cmd']
     binds = []
     set_list = []
@@ -873,9 +886,10 @@ def get_last_lsn(req):
     }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
+    pdict = cast(dict, pdict)
 
     cluster_id = pdict['cluster_id']
     err_code, lsn_list_data = ha_mgr.get_last_lsn(cluster_id)
@@ -901,9 +915,11 @@ def get_repl_delay(req):
     }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
+    pdict = cast(dict, pdict)
+
     cluster_id = pdict['cluster_id']
 
     err_code, data = ha_mgr.get_repl_delay(cluster_id)
@@ -921,9 +937,11 @@ def online_cluster(req):
     }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
+    pdict = cast(dict, pdict)
+
     cluster_id = pdict['cluster_id']
 
     err_code, err_list = ha_mgr.online(cluster_id)
@@ -940,9 +958,9 @@ def offline_cluster(req):
     }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     cluster_id = pdict['cluster_id']
 
     err_code, err_msg = ha_mgr.offline(cluster_id)
@@ -971,9 +989,9 @@ def repair(req):
     }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     cluster_id = pdict['cluster_id']
     db_id = pdict['db_id']
     up_db_id = pdict['up_db_id']
@@ -1028,11 +1046,11 @@ def sr_switch(req):
     }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     cluster_id = pdict['cluster_id']
-    db_id = pdict.get('db_id')
+    db_id = pdict.get('db_id', '0')
     room_id = pdict.get('room_id')
     keep_cascaded = pdict.get('keep_cascaded', False)
     if not db_id and room_id is None:
@@ -1053,7 +1071,7 @@ def sr_switch(req):
     # 数据库操作时时检查是否集群信息存在,存在则判断集群是否下线,如果未下线则不允许操作
     if cluster_id:
         return_cluster_state = dao.get_cluster_state(cluster_id)
-        if return_cluster_state != cluster_state.OFFLINE and return_cluster_state != cluster_state.FAILED:
+        if return_cluster_state not in {cluster_state.OFFLINE, cluster_state.FAILED}:
             return 400, f"Before performing database operations, please take its cluster(cluster_id={cluster_id}) offline"
 
     sql = 'select db_id from clup_db where is_primary=1 and cluster_id = %s'
@@ -1067,22 +1085,14 @@ def sr_switch(req):
     if cnt > 0:
         return 400, "The cluster has other operations in progress. Please try again later."
 
-    workwx = pdict.get("workwx")
     # 先检测是否可以切换,如果不能,直接返回
     try:
+        db_id = int(db_id)
         ret_code, msg = ha_mgr.test_sr_can_switch(cluster_id, db_id, old_primary_db, keep_cascaded)
         if ret_code != 0:
-            if workwx:
-                workwx['db_id'] = db_id
-                workwx['state'] = "Failed"
-                pg_helpers.send_workwx_alarm(workwx)
             return 400, msg
     except Exception as e:
         logging.error(f"Call test_sr_can_switch exception: {traceback.format_exc()}")
-        if pdict.get("workwx"):
-            workwx['db_id'] = db_id
-            workwx['state'] = "Failed"
-            pg_helpers.send_workwx_alarm(workwx)
         return 400, str(e)
 
     # 因为是一个长时间运行的操作,所以生成一个后台任务,直接返回
@@ -1092,12 +1102,6 @@ def sr_switch(req):
 
     ret_data = {"task_id": task_id, "task_name": task_name}
     raw_data = json.dumps(ret_data)
-    if workwx:
-        try:
-            workwx['db_id'] = db_id
-            pg_helpers.send_workwx_alarm(workwx)
-        except Exception as e:
-            logging.error(f'Alarm sending failure: {repr(e)}')
     return 200, raw_data
 
 
@@ -1109,9 +1113,9 @@ def get_cluster_list_for_host_login(req):
               }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     page_num = pdict['page_num']
     page_size = pdict['page_size']
@@ -1150,9 +1154,9 @@ def get_cluster_ip_list_for_login(req):
     params = {
         "cluster_id": csu_http.MANDATORY | csu_http.INT
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     with dbapi.DBProcess() as dbp:
         sql = "SELECT cluster_type, cluster_data FROM clup_cluster WHERE cluster_id = %(cluster_id)s"
@@ -1178,9 +1182,9 @@ def get_all_cluster(req):
     """
     params = {}
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, _pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     # sql = "select cluster_id,cluster_data->>'cluster_name' as cluster_name from clup_cluster where state=0;"
     sql = "select cluster_id,cluster_data->>'cluster_name' as cluster_name " \
@@ -1200,9 +1204,9 @@ def get_all_instance(req):
         'cluster_id': csu_http.MANDATORY
     }
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     sql = "select db_id, host,is_primary from clup_db where cluster_id = %(cluster_id)s order by host;"
     rows = dbapi.query(sql, pdict)
@@ -1237,9 +1241,9 @@ def create_sr_cluster(req):
         'wal_segsize': csu_http.INT,           # wal段文件大小，仅PG11及以上版本支持
         'setting_list': csu_http.MANDATORY
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     # check vip is used or not
     check_sql = "SELECT * FROM clup_used_vip WHERE vip=%s"
@@ -1344,7 +1348,7 @@ def check_shared_disk(req):
         'host1_ip': csu_http.MANDATORY,
         'host2_ip': csu_http.MANDATORY,
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 200, json.dumps({"err_code": err_code, "err_msg": pdict})
 
@@ -1440,13 +1444,12 @@ def check_shared_disk(req):
                     if tmp_mount_path == mount_path:
                         err_msg = f"Other devices({tmp_dev_path}) are mounted in the directory({pdict['mount_path']}) on the host({host})!"
                         return 200, json.dumps({"err_code": -1, "err_msg": err_msg})
+                elif tmp_mount_path != mount_path:
+                    err_msg = f"The shared disk on the host({host}) has been mounted to another directory({tmp_mount_path}), please uninstall and try again!"
+                    return 200, json.dumps({"err_code": -1, "err_msg": err_msg})
                 else:
-                    if tmp_mount_path != mount_path:
-                        err_msg = f"The shared disk on the host({host}) has been mounted to another directory({tmp_mount_path}), please uninstall and try again!"
-                        return 200, json.dumps({"err_code": -1, "err_msg": err_msg})
-                    else:
-                        err_msg = f"The shared disk on the host({host}) has been mounted to the directory({tmp_mount_path}), please uninstall and try again!"
-                        return 200, json.dumps({"err_code": -1, "err_msg": err_msg})
+                    err_msg = f"The shared disk on the host({host}) has been mounted to the directory({tmp_mount_path}), please uninstall and try again!"
+                    return 200, json.dumps({"err_code": -1, "err_msg": err_msg})
 
         except Exception:
             err_msg = traceback.format_exc()
@@ -1498,9 +1501,9 @@ def get_cluster_all_db(req):
         'cluster_id': csu_http.MANDATORY,
         'db_id': csu_http.MANDATORY
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     sql = "SELECT db_id, up_db_id, host, port, db_state," \
         " db_detail->>'polar_type' as polar_type" \
         " FROM clup_db " \
@@ -1514,9 +1517,9 @@ def set_cluster_failover_state(req):
         'cluster_id': csu_http.MANDATORY | csu_http.INT,
         'auto_failback': csu_http.MANDATORY | csu_http.INT
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     try:
         sql = f"UPDATE clup_cluster set cluster_data=jsonb_set(cluster_data, '{{auto_failback}}', '{pdict['auto_failback']}')" \
@@ -1531,9 +1534,9 @@ def get_cluster_primary_info_api(req):
     params = {
         "cluster_id": csu_http.MANDATORY
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     db = dao.get_primary_info(pdict['cluster_id'])
     if not db:
         return 400, "Cluster primary database not found."
@@ -1544,13 +1547,17 @@ def get_db_relation(req):
     params = {
         "cluster_id": csu_http.MANDATORY
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
+    pdict = cast(dict, pdict)
+
     cluster_id = pdict['cluster_id']
     primary_db = dao.get_primary_info(cluster_id)
     primary_db['name'] = primary_db['host']
-    err_code, room = pg_helpers.get_db_room(primary_db['db_id'])
+    err_code, err_msg, room = pg_helpers.get_db_room(primary_db['db_id'])
+    if err_code != 0:
+        return 400, err_msg
     primary_db['room_name'] = room.get('room_name', '') if err_code == 0 else ''
     if not primary_db:
         return 400, f'Failed to obtain cluster primary database information.(cluster_id:{cluster_id})'
@@ -1568,9 +1575,9 @@ def change_db_ha_state(req):
         'state': csu_http.MANDATORY | csu_http.INT,
     }
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     sql = "UPDATE clup_db SET state=%(state)s WHERE db_id=%(db_id)s"
     dbapi.execute(sql, pdict)
     return 200, 'OK'
@@ -1580,9 +1587,9 @@ def check_ha(req):
     params = {
         'cluster_id': csu_http.MANDATORY | csu_http.INT,
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     cluster_id = pdict['cluster_id']
 
@@ -1591,7 +1598,7 @@ def check_ha(req):
         db_id = row['db_id']
         up_db_id = row.get('up_db_id')
         state = row['state']
-        if state != node_state.FAULT and state != node_state.NORMAL:
+        if state not in {node_state.FAULT, node_state.NORMAL}:
             continue
         if row['is_primary']:
             db_dict = dao.get_db_info(db_id)
@@ -1645,9 +1652,9 @@ def create_polar_unsd_cluster(req):
         "wal_segsize": csu_http.INT,  # wal段文件大小，仅PG11及以上版本支持
         "setting_list": csu_http.MANDATORY,
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     # check vip is used or not
     check_sql = "SELECT * FROM clup_used_vip WHERE vip=%s"
@@ -1761,9 +1768,9 @@ def create_polar_sd_cluster(req):
         'polar_datadir': csu_http.MANDATORY,
         'ignore_reset_cmd_return_code': csu_http.INT,
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     # check vip is useed or not
     check_sql = "SELECT * FROM clup_used_vip WHERE vip=%s"
@@ -1873,9 +1880,10 @@ def modify_polar_cluster_info(req):
     }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
+    pdict = cast(dict, pdict)
 
     cluster_id = pdict['cluster_id']
     attr_dict = copy.copy(pdict)
@@ -1912,10 +1920,12 @@ def modify_polar_cluster_info(req):
 
         rooms = cluster_dict.get('rooms', {})
         cluster_dict.update(attr_dict)
-        cur_room_info = pg_helpers.get_current_cluster_room(cluster_id)
+        err_code, err_msg, cur_room_info = pg_helpers.get_current_cluster_room(cluster_id)
+        if err_code != 0:
+            return 400, err_msg
         if cur_room_info:
             for k, v in attr_dict.items():
-                if k in cur_room_info.keys():
+                if k in cur_room_info:
                     cur_room_info[k] = v
             room_id = cur_room_info.pop('room_id', '0')
             rooms[str(room_id)] = {
@@ -1941,16 +1951,16 @@ def polar_switch(req):
     }
 
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     db_id = pdict["db_id"]
     cluster_id = pdict["cluster_id"]
 
     # 检查集群状态是否离线,如果未离线则不允许操作
     current_cluster_state = dao.get_cluster_state(cluster_id)
-    if current_cluster_state != cluster_state.OFFLINE and current_cluster_state != cluster_state.FAILED:
+    if current_cluster_state not in {cluster_state.OFFLINE, cluster_state.FAILED}:
         return 400, f"Before performing database operations, please take its cluster(cluster_id={cluster_id}) offline"
 
     # Get the current primary instance
@@ -2003,13 +2013,13 @@ def check_pfs_disk_name_validity(req):
         'host_list': csu_http.MANDATORY
     }
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     code, result = polar_lib.check_pfs_disk_name_validity(pdict['host_list'], pdict['pfs_disk_name'])
     res_data = {
-        "is_valid": True if code == 0 else False,
+        "is_valid": code == 0,
         "formated": result if code == 0 else 'unknow',
         "err_msg": '' if code == 0 else result
     }
@@ -2030,9 +2040,9 @@ def format_pfs_disk(req):
         'pfs_disk_name': csu_http.MANDATORY,
     }
     # 检查参数的合法性,如果成功,把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     host_list = pdict['host_list']
     pfs_disk_name = pdict['pfs_disk_name']
@@ -2068,9 +2078,9 @@ def batch_online_cluster(req):
         'cluster_id_list': csu_http.MANDATORY
     }
 
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     cluster_id_list = pdict['cluster_id_list']
     wait_online_list = list()
@@ -2126,9 +2136,9 @@ def batch_offline_cluster(req):
         'cluster_id_list': csu_http.MANDATORY
     }
 
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     cluster_id_list = pdict['cluster_id_list']
     wait_offline_list = list()
@@ -2179,9 +2189,9 @@ def add_vip_pool(req):
         'mask_len': csu_http.INT
     }
 
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     # check the start_ip and end_ip in the same network
     start_ip_network = IPv4Network(f"{pdict['start_ip']}/{pdict['mask_len']}", strict=False)
@@ -2226,9 +2236,9 @@ def get_vip_pool(req):
         'filter': 0
     }
 
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     offset = (pdict['page_num'] - 1) * pdict['page_size']
     sql = "SELECT * FROM clup_vip_pool ORDER BY pool_id LIMIT %s OFFSET %s"
@@ -2270,9 +2280,9 @@ def delete_vip_pool(req):
         'pool_id': csu_http.INT
     }
 
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     # check this pool has vip is used or not
     sql = "SELECT COUNT(*) FROM clup_used_vip WHERE pool_id = %s"
@@ -2296,9 +2306,9 @@ def update_vip_pool(req):
         'mask_len': 0
     }
 
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     # get the vip list
     vip_sql = "SELECT vip FROM clup_used_vip WHERE pool_id = %s"
@@ -2352,9 +2362,9 @@ def get_vip_list(req):
         'filter': 0
     }
 
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     offset = (pdict['page_num'] - 1) * pdict['page_size']
     ret_list = list()
@@ -2413,9 +2423,7 @@ def get_vip_list(req):
     # if filter
     filter_ret_list = list()
     for row in ret_list:
-        if row["host"] == pdict["filter"]:
-            filter_ret_list.append(row)
-        elif row["vip"] == pdict["filter"]:
+        if row["host"] == pdict["filter"] or row["vip"] == pdict["filter"]:
             filter_ret_list.append(row)
         # else:
         #     # check ip is in the network or not
@@ -2434,9 +2442,9 @@ def allot_one_vip(req):
         'pool_id': csu_http.INT
     }
 
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     # get the vip pool info
     sql = "SELECT start_ip, end_ip, mask_len FROM clup_vip_pool WHERE pool_id = %s"
@@ -2478,9 +2486,9 @@ def check_vip_in_pool(req):
         'vip': csu_http.MANDATORY
     }
 
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     code, result = ip_lib.check_vip_in_pool(pdict['pool_id'], pdict['vip'])
     if code != 0:

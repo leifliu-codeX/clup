@@ -73,9 +73,7 @@ def __load_config():
 
             if len(line) < 1:
                 continue
-            if line[0] == "#":
-                continue
-            elif line[0] == ";":
+            if line[0] == "#" or line[0] == ";":
                 continue
             try:
                 pos = line.index('=')
@@ -190,10 +188,12 @@ def set_key(key, value):
         __lock.release()
 
 
-def getint(key):
+def getint(key, default: int = 0):
     global __lock
     __lock.acquire()
     try:
+        if key not in __data:
+            return default
         return int(__data[key])
     finally:
         __lock.release()

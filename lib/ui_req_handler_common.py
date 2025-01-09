@@ -50,9 +50,9 @@ def get_dict_list(req):
     }
 
     # 检查参数的合法性，如果成功，把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     dict_type_list = pdict['dict_type_list'].split(',')
     dict_type_list = [k.strip() for k in dict_type_list]
@@ -136,9 +136,9 @@ def basic_test_api(req):
     """
     params = {
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, _pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     ret = config.get('test', 'none')
     return 200, ret
 

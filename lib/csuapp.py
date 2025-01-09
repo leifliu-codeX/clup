@@ -22,15 +22,16 @@
 @description: 为应用提供daemon运行的模块
 """
 
-import os
-import sys
-import time
+import contextlib
 import inspect
-import logging.handlers
-import traceback
 import logging
+import logging.handlers
+import os
 import signal
+import sys
 import threading
+import time
+import traceback
 
 # 应用程序名
 __app_name = ''
@@ -58,12 +59,11 @@ def prepare_run(app_name: str, foreground=False):
 
     pidfile = os.path.join(__run_path, "%s.pid" % app_name)
     if os.path.exists(pidfile):
-        f = open(pidfile, "r")
-        pidstr = f.readline()
+        with open(pidfile, "r", encoding='utf-8') as f:
+            pidstr = f.readline()
         pidstr = pidstr.strip()
         if pidstr.isdigit():
             pid = int(pidstr)
-            f.close()
             try:
                 os.kill(pid, 0)
                 print("ERROR : %s(pid=%d) already running !!!" % (app_name, pid))
@@ -75,28 +75,27 @@ def prepare_run(app_name: str, foreground=False):
 
     if foreground:
         # 当是后台运行时，daemon()函数会自动写pid文件，前台运行时需要自己生成pid文件
-        with open(pidfile, "w") as fp:
+        with open(pidfile, "w", encoding='utf-8') as fp:
             fp.write(str(os.getpid()))
         return
 
     try:
         sys.stdout.flush()
         sys.stderr.flush()
-        si = open('/dev/null', 'r')
-        so = open('/dev/null', 'a+')
-        se = open('/dev/null', 'a+')
-        os.dup2(si.fileno(), sys.stdin.fileno())
-        os.dup2(so.fileno(), sys.stdout.fileno())
-        os.dup2(se.fileno(), sys.stderr.fileno())
-
+        with open('/dev/null', 'r', encoding='utf-8') as si, \
+             open('/dev/null', 'a+', encoding='utf-8') as so, \
+             open('/dev/null', 'a+', encoding='utf-8') as se:
+            os.dup2(si.fileno(), sys.stdin.fileno())
+            os.dup2(so.fileno(), sys.stdout.fileno())
+            os.dup2(se.fileno(), sys.stderr.fileno())
         pid = os.fork()
         if pid > 0:
-            f = open(pidfile, "w")
-            # 需要在父进程中写入pid文件，否则在systemctl中会报如下错误
-            # PID file XXXX.pid not readable (yet?) after start
-            f.write(str(pid))
-            f.close()
-            sys.exit(0)
+            with open(pidfile, "w", encoding='utf-8') as fp:
+                # 需要在父进程中写入pid文件，否则在systemctl中会报如下错误
+                # PID file XXXX.pid not readable (yet?) after start
+                fp.write(str(pid))
+                fp.close()
+                sys.exit(0)
 
         os.chdir('/')
         os.setsid()
@@ -128,15 +127,14 @@ def stop(app_name: str, retry_cnt=5, retry_sleep_seconds=4):
         print("%s not running" % app_name)
         sys.exit(0)
 
-    f = open(pidfile, "r")
-    pidstr = f.readline()
+    with open(pidfile, "r", encoding='utf-8') as fp:
+        pidstr = fp.readline()
     pidstr = pidstr.strip()
     if not pidstr.isdigit():
         print("ERROR : invalid content in %s !!!" % pidfile)
         sys.exit(1)
 
     pid = int(pidstr)
-    f.close()
     try:
         os.kill(pid, 0)
     except Exception:
@@ -180,14 +178,13 @@ def status(app_name: str):
     if not os.path.exists(pidfile):
         return 0, "%s not running." % app_name
 
-    f = open(pidfile, "r")
-    pidstr = f.readline()
+    with open(pidfile, "r", encoding='utf-8') as fp:
+        pidstr = fp.readline()
     pidstr = pidstr.strip()
     if not pidstr.isdigit():
         return -1, "ERROR : invalid content in %s !!!" % pidfile
 
     pid = int(pidstr)
-    f.close()
     try:
         os.kill(pid, 0)
         return 1, "%s(pid=%d) is running." % (app_name, pid)
@@ -241,7 +238,7 @@ WantedBy=multi-user.target
 """.format(service_name=service_name, pid_file=pid_file, service_script=service_script, service_list=str_service_list)
 
     try:
-        with open(srv_file, "w") as fp:
+        with open(srv_file, "w", encoding='utf-8') as fp:
             fp.write(srv_content)
     except Exception as e:
         err_msg = "Write %s error: %s\n" % (srv_file, str(e))
@@ -385,10 +382,8 @@ def cleanup() -> int:
             continue
         while True:
             is_alive = False
-            try:
-                is_alive = t.isAlive()
-            except Exception:
-                pass
+            with contextlib.suppress(Exception):
+                is_alive = t.is_alive()
             if is_alive:
                 if i > retry_cnt:
                     logging.info(f"Not waiting for the thread({t.name}) to stop!")

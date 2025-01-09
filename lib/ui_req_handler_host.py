@@ -38,17 +38,14 @@ def get_host_list(req):
               }
 
     # 检查参数的合法性，如果成功，把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     page_num = pdict['page_num']
     page_size = pdict['page_size']
 
-    if 'filter' in pdict:
-        filter_cond = pdict['filter']
-    else:
-        filter_cond = ''
+    filter_cond = pdict.get('filter', '')
 
     offset = (page_num - 1) * page_size
 
@@ -105,9 +102,9 @@ def remove_host(req):
     }
 
     # 检查参数的合法性，如果成功，把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     sql = "SELECT hid FROM clup_host WHERE ip=%(ip)s"
     rows = dbapi.query(sql, pdict)
@@ -137,9 +134,9 @@ def check_os_user_exists(req):
         "host": csu_http.MANDATORY,
         "user": csu_http.MANDATORY,
     }
-    code_msg, pdict = csu_http.parse_parms(param, req)
-    if code_msg != 0:
-        return 400, pdict
+    err_code, err_msg, pdict = csu_http.parse_parms(param, req)
+    if err_code != 0:
+        return 400, err_msg
 
     host = pdict['host']
     user = pdict['user']
@@ -164,9 +161,9 @@ def check_os_uid_exists(req):
         "host": csu_http.MANDATORY,
         "os_uid": csu_http.MANDATORY | csu_http.INT,
     }
-    code_msg, pdict = csu_http.parse_parms(param, req)
-    if code_msg != 0:
-        return 400, pdict
+    err_code, err_msg, pdict = csu_http.parse_parms(param, req)
+    if err_code != 0:
+        return 400, err_msg
 
     host = pdict['host']
     os_uid = pdict['os_uid']
@@ -188,9 +185,9 @@ def check_path_is_dir(req):
         "host": csu_http.MANDATORY,
         "path": csu_http.MANDATORY,
     }
-    code_msg, pdict = csu_http.parse_parms(param, req)
-    if code_msg != 0:
-        return 400, pdict
+    err_code, err_msg, pdict = csu_http.parse_parms(param, req)
+    if err_code != 0:
+        return 400, err_msg
 
     host = pdict['host']
     path = pdict['path']
@@ -216,9 +213,9 @@ def check_port_is_used(req):
         "host": csu_http.MANDATORY,
         "port": csu_http.MANDATORY | csu_http.INT,
     }
-    code_msg, pdict = csu_http.parse_parms(param, req)
-    if code_msg != 0:
-        return 400, pdict
+    err_code, err_msg, pdict = csu_http.parse_parms(param, req)
+    if err_code != 0:
+        return 400, err_msg
 
     host = pdict['host']
     port = pdict['port']
@@ -247,9 +244,9 @@ def check_polar_shared_dirs(req):
         "pfs_disk_name": csu_http.MANDATORY,
         "polar_datadir": csu_http.MANDATORY
     }
-    code_msg, pdict = csu_http.parse_parms(param, req)
-    if code_msg != 0:
-        return 400, pdict
+    err_code, err_msg, pdict = csu_http.parse_parms(param, req)
+    if err_code != 0:
+        return 400, err_msg
 
     host = pdict['host']
     pfs_disk_name = pdict['pfs_disk_name']
@@ -267,7 +264,7 @@ def check_polar_shared_dirs(req):
         rpc = err_msg
         # 检查共享磁盘是否存在
         err_code, err_msg, _out_msg = rpc.run_cmd_result(check_disk_cmd)
-        if err_code != 0 and err_code != 255:
+        if err_code not in {0, 255}:
             if err_msg == '':
                 err_msg = f'the disk ({pfs_disk_name}) maybe not mkfs.'
             return 200, json.dumps({"err_code": -1, "err_msg": f"Error occurred while checking shared disks, err_msg={err_msg};"})

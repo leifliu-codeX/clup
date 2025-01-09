@@ -1,0 +1,40 @@
+{
+    //"workbench.colorTheme": "Hyper Term Black",
+    "workbench.colorTheme":"Default Dark+",
+    "editor.fontSize": 16,
+    "editor.minimap.enabled": false,
+    "terminal.integrated.fontSize": 15,
+    "terminal.integrated.fontFamily": "monospace",
+    "terminal.integrated.defaultProfile.linux": "bash",
+    "editor.formatOnSave": true, // 保存时自动格式化
+    "editor.codeActionsOnSave": {
+        "source.fixAll.ruff": true,
+        "source.organizeImports.ruff": true
+    },
+    "editor.unicodeHighlight.allowedLocales": {
+        "zh-hans": true
+    },
+    "editor.suggest.selectionMode": "whenTriggerCharacter",
+    "files.autoSave": "afterDelay",
+    "files.trimTrailingWhitespace": true,
+    "scm.inputFontSize": 18,
+    "debug.console.fontSize": 18,
+    "markdown.preview.fontSize": 18,
+
+    "python.formatting.provider": "autopep8",
+    "python.analysis.useLibraryCodeForTypes": true,
+    "python.defaultInterpreterPath": "/opt/csu_pyenv/bin/python3",
+    "python.languageServer": "Pylance",
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.diagnosticMode": "openFilesOnly",
+    "python.analysis.inlayHints.functionReturnTypes": true,
+    "python.analysis.inlayHints.variableTypes": false,
+    //"python.analysis.inlayHints.callArgumentNames": "all",
+    "python.analysis.addImport.exactMatchOnly": true,
+    "python.analysis.extraPaths": [
+        "./lib"
+    ],
+    "python.autoComplete.extraPaths": [
+        "./lib"
+    ],
+}

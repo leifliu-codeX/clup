@@ -24,10 +24,12 @@
 
 import logging
 import threading
+from typing import cast
 
 import cluster_state
 import config
 import csuapp
+import csurpc
 import dao
 import dbapi
 import general_task_mgr
@@ -36,8 +38,6 @@ import pg_db_lib
 import pg_helpers
 import task_type_def
 import utils
-
-import csurpc
 
 
 class ServiceHandle:
@@ -167,7 +167,7 @@ class ServiceHandle:
             return -1, f"This cluster(id={cluster_id}) is not streaming replication cluster!"
 
         state = cluster['state']
-        if state != cluster_state.NORMAL and state != cluster_state.OFFLINE:  # 不是正常或离线状态，不能切换
+        if state not in {cluster_state.NORMAL, cluster_state.OFFLINE}:  # 不是正常或离线状态，不能切换
             return -1, f"cluster(id={cluster_id}) state is not Normal or offline, can not switch!"
 
         # 先检测是否可以切换，如果不能，直接返回
@@ -210,7 +210,7 @@ class ServiceHandle:
         state = dao.get_cluster_state(cluster_id)
         if state is None:
             return -1, f'cluster({cluster_id}) not exists!'
-        if state != cluster_state.OFFLINE and state != cluster_state.FAILED:
+        if state not in {cluster_state.OFFLINE, cluster_state.FAILED}:
             return -1, f"Can not delete cluster that state is {cluster_state.to_str(state)}!"
         with dbapi.DBProcess() as dbp:
             dbp.execute("delete from clup_db WHERE cluster_id=%s", (cluster_id,))
@@ -273,9 +273,11 @@ class ServiceHandle:
 def run_service():
     try:
         handle = ServiceHandle()
+        mypass = config.get('internal_rpc_pass')
+        mypass = cast(str, mypass)
         srv = csurpc.Server(
             'ha-service', handle, csuapp.is_exit,
-            password=config.get('internal_rpc_pass'), thread_count=10, debug=1)
+            password=mypass, thread_count=10, debug=1)
         server_rpc_port = config.get('server_rpc_port')
         srv.bind(f"tcp://0.0.0.0:{server_rpc_port}")
         srv.run()

@@ -22,17 +22,18 @@
 @description: zqpool管理工具
 """
 
+import json
 import os
 import time
-import dbapi
-import json
-import requests
 import traceback
-import rpc_utils
-import db_encrypt
-
-from copy import deepcopy
 from collections import OrderedDict
+from copy import deepcopy
+from typing import Tuple
+
+import db_encrypt
+import dbapi
+import requests
+import rpc_utils
 
 DB_READONLY = 1      # 只读节点
 DB_READWRITE = 2     # 读写节点
@@ -404,18 +405,18 @@ def delete_systemd_servie(zqpool_id):
     return 0, "Success delete systemd service file."
 
 
-def get_pool_info(pool_id):
+def get_pool_info(pool_id) -> Tuple[int, str, dict]:
     # get the pool_info
     sql = "SELECT pool_fe FROM csu_zqpool_pools WHERE pool_id = %s"
     rows = dbapi.query(sql, (pool_id, ))
     if not rows:
-        return -1, f"Cant find any records for the pool(id={pool_id})."
+        return -1, f"Cant find any records for the pool(id={pool_id}).", {}
     pool_fe = rows[0]['pool_fe']
 
     # get the zqpool info
     zqpool_info = get_zqpool_mgr_info(pool_id)
     if not zqpool_info:
-        return -1, "Cant find the pool manager information."
+        return -1, "Cant find the pool manager information.", {}
 
     pool_info = {
         "pool_id": pool_id,
@@ -432,7 +433,7 @@ def get_pool_info(pool_id):
     code, result = send_request(zqpool_info['host'], zqpool_info['mgr_port'], api, params_dict)
     if code != 0 or isinstance(result, str):
         pool_info['state'] = -1
-        return -1, pool_info
+        return -1, '', pool_info
     pool_info = result[0]
     pool_info['ID'] = int(pool_info['ID'])
 
@@ -465,7 +466,7 @@ def get_pool_info(pool_id):
     if pool_info['FeMaxConns'] == 0:
         pool_info['satte'] = 0
 
-    return 0, pool_info
+    return 0, '', pool_info
 
 
 def get_pool_list(filter=None):
@@ -489,7 +490,7 @@ def get_pool_list(filter=None):
     ret_list = list()
     for pool_info in pool_list:
         # get the pool info
-        code, result = get_pool_info(pool_info['pool_id'])
+        code, _msg, result = get_pool_info(pool_info['pool_id'])
         if code != 0:
             pool_info['state'] = -1
         else:
@@ -557,10 +558,7 @@ def get_portals_list(pool_info_list):
                     portal_info['port'] = be_port
                     portal_info['db_id'] = db_info['db_id']
                     portal_info['cluster_id'] = db_info['cluster_id']
-                    if portal_info['State'] in BE_STATE_DICT:
-                        portal_info['state'] = BE_STATE_DICT[portal_info['State']]
-                    else:
-                        portal_info['state'] = None
+                    portal_info["state"] = BE_STATE_DICT.get(portal_info["State"], None)
                     # remove keys
                     for key in remove_keys:
                         del portal_info[key]
@@ -593,9 +591,9 @@ def modify_pool_info(pool_id, option, setting_dict):
         return -1, "Get the zqpool manager information failed."
 
     # get the pool_info
-    code, result = get_pool_info(pool_id)
+    code, msg, result = get_pool_info(pool_id)
     if code != 0:
-        return -1, f"Get the pool info failed, {result}."
+        return -1, f"Get the pool info failed: {msg}."
 
     pool_info = result
     host = zqpool_info['host']
@@ -976,7 +974,7 @@ def get_pool_init_conf(package_id, strip_mgr=True):
 
     if strip_mgr:
         mgr_setting_list = ['mgr_port', 'mgr_addr', 'listen_port', 'listen_addr', 'mgr_token', 'exporter_port']
-        setting_list = [setting for setting in conf_dict.keys()]
+        setting_list = [setting for setting in conf_dict]
         for setting in setting_list:
             if setting in mgr_setting_list:
                 del conf_dict[setting]
@@ -1055,7 +1053,7 @@ def update_zqpool_conf(host, conf_file, new_conf):
 def delete_pool(pool_id):
     pool_state = 1
     # check the pool state
-    code, result = get_pool_info(pool_id)
+    code, _msg, result = get_pool_info(pool_id)
     if code != 0:
         pool_state = -1
     else:

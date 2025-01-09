@@ -30,9 +30,9 @@ import traceback
 
 import cluster_state
 import dao
-import dbapi
 import database_state
 import db_encrypt
+import dbapi
 import general_task_mgr
 import node_state
 import pg_db_lib
@@ -99,7 +99,7 @@ def failover_sr_cluster(cluster_id, pg, db_port, err_msg_list):
         task_log_info(task_id, f"Cluster({cluster_id}): Host({pg['host']}) is ok, only database({pg['host']}:{db_port}) failed, restart database ....")
         if polar_type in polar_type_list:
             err_code, err_msg = polar_lib.start_pfs(pg['host'], pg['db_id'])
-            if err_code != 0 and err_code != 1:
+            if err_code not in {0, 1}:
                 task_log_error(task_id, err_msg)
                 general_task_mgr.complete_task(task_id, -1, err_msg)
                 return -1, err_msg
@@ -157,9 +157,8 @@ def failover_sr_cluster(cluster_id, pg, db_port, err_msg_list):
                 err_code, err_msg = failover_polar_primary_db(task_id, cluster_id, db_id)
             else:
                 err_code, err_msg = failover_primary_db(task_id, cluster_id, db_id)
-        else:
-            if not polar_type:
-                err_code, err_msg = failover_standby_db(task_id, cluster_id, db_id)
+        elif not polar_type:
+            err_code, err_msg = failover_standby_db(task_id, cluster_id, db_id)
     except Exception:
         err_code = -1
         trace_msg = traceback.format_exc()
@@ -309,7 +308,12 @@ def failover_primary_db(task_id, cluster_id, db_id):
 
     # 在同一机房选择新的主库自动切换
     if not cluster_dict.get('auto_failover', False):
-        room_info = pg_helpers.get_current_cluster_room(cluster_id)
+        err_code, err_msg, room_info = pg_helpers.get_current_cluster_room(cluster_id)
+        if err_code != 0:
+            task_log_error(task_id, err_msg)
+            task_log_info(task_id, f"{pre_msg} failed!!!")
+            return -1, err_msg
+
         cur_room_id = str(room_info['room_id'])
         all_good_stb_db = [db for db in all_good_stb_db if db.get('room_id', '0') == cur_room_id]
 
@@ -334,7 +338,7 @@ def failover_primary_db(task_id, cluster_id, db_id):
     new_pri_pg = None
     new_pri_scores = 0
     max_lsn = 0
-    max_lsn_pg = None
+    max_lsn_pg = {}
     # 先根据scores排序，scores值越大，优先级越低
     all_good_stb_db.sort(key=lambda x: x['scores'], reverse=False)
     for p in all_good_stb_db:
@@ -573,7 +577,12 @@ def failover_polar_primary_db(task_id, cluster_id, db_id):
 
     # 在同一机房选择新的主库自动切换
     if not cluster_dict.get('auto_failover', False):
-        room_info = pg_helpers.get_current_cluster_room(cluster_id)
+        err_code, err_msg, room_info = pg_helpers.get_current_cluster_room(cluster_id)
+        if err_code != 0:
+            task_log_error(task_id, err_msg)
+            task_log_info(task_id, f"{pre_msg} failed!!!")
+            return -1, err_msg
+
         cur_room_id = str(room_info['room_id'])
         all_good_stb_db = [db for db in all_good_stb_db if db.get('room_id', '0') == cur_room_id]
 
@@ -746,7 +755,7 @@ def failover_polar_primary_db(task_id, cluster_id, db_id):
             polar_type = db_dict.get('polar_type', None)
             if polar_type in polar_type_list:
                 err_code, err_msg = polar_lib.start_pfs(db_dict['host'], db_dict['db_id'])
-                if err_code != 0 and err_code != 1:
+                if err_code not in {0, 1}:
                     return 400, err_msg
 
             err_code, err_msg = pg_db_lib.start(db_dict['host'], db_dict['pgdata'])
@@ -767,7 +776,6 @@ def failover_polar_primary_db(task_id, cluster_id, db_id):
 
         step = f"{pre_msg}: Check and start new primary db, db_id: ({new_pri_pg['db_id']})."
         task_log_info(task_id, step)
-        # err_code, err_msg = pg_helpers.set_primary(new_pri_pg['db_id'])
         # 检查新主库是否启动成功
         err_code, is_run = pg_db_lib.is_running(new_pri_pg['host'], new_pri_pg['pgdata'])
         if err_code == 0 and not is_run:
@@ -775,7 +783,7 @@ def failover_polar_primary_db(task_id, cluster_id, db_id):
             polar_type = new_pri_pg.get('polar_type', None)
             if polar_type in polar_type_list:
                 err_code, err_msg = polar_lib.start_pfs(new_pri_pg['host'], new_pri_pg['db_id'])
-                if err_code != 0 and err_code != 1:
+                if err_code not in {0, 1}:
                     return err_code, err_msg
             pg_db_lib.start(new_pri_pg['host'], new_pri_pg['pgdata'])
         if err_code != 0:

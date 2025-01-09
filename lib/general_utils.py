@@ -25,6 +25,7 @@
 import logging
 import os
 import traceback
+from typing import Tuple
 
 import rpc_utils
 
@@ -50,7 +51,7 @@ def os_read_file(file_path, offset, read_len):
             os.close(fd)
 
 
-def get_file_size(file_path):
+def get_file_size(file_path) -> Tuple[int, str, int]:
     """
     删除指定的文件
     :return:
@@ -59,10 +60,10 @@ def get_file_size(file_path):
     logging.info(f"Recv rpc call: {rpc_info}")
     if not os.path.exists(file_path):
         err_msg = f'file {file_path} is not exists'
-        return -1, err_msg
+        return -1, err_msg, 0
     else:
         file_size = os.path.getsize(file_path)
-        return 0, file_size
+        return 0, '', file_size
 
 
 def upload_file(host, file_name, tar_file_name, block_size=524288):
@@ -72,9 +73,9 @@ def upload_file(host, file_name, tar_file_name, block_size=524288):
     block_size: 单次传输大小,单位字节,默认512KB
     """
     logging.info(f'get file ({file_name}) size')
-    err_code, file_size = get_file_size(file_name)
+    err_code, err_msg, file_size = get_file_size(file_name)
     if err_code != 0:
-        return err_code, file_size
+        return err_code, err_msg
     offset = 0
     a = 0
     while True:

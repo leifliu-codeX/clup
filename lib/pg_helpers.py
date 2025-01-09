@@ -29,6 +29,7 @@ import os
 import re
 import time
 import traceback
+from typing import Tuple, Union
 
 import dao
 import database_state
@@ -39,6 +40,7 @@ import long_term_task
 import pg_db_lib
 import pg_utils
 import probe_db
+import psycopg2
 import rpc_utils
 import task_type_def
 
@@ -155,7 +157,7 @@ def create_db(pdict):
 
         setting_dict = pg_setting_list_to_dict(pdict['setting_list'])
         setting_dict['port'] = pdict['port']
-        if "pg_stat_statements" not in setting_dict.get("shared_preload_libraries"):
+        if "pg_stat_statements" not in setting_dict.get("shared_preload_libraries"):  # type: ignore
             return -1, 'Database needs pg_stat_statements plug-in, please fill in in shared_preload_libraries'
 
         host = pdict['host']
@@ -479,66 +481,6 @@ def change_up_db_by_db_id(db_id, up_db_id):
     return 0, ''
 
 
-def set_primary(db_id):
-    """
-    将db_id设置为主库; 直接将pgdata下面的recovery.conf 改为recovery.done,更新一下is_primary
-    pg12版本只需要删掉standby.signal文件
-    :param db_id:
-    :return:
-    """
-    sql = "SELECT pgdata,host,cluster_id,db_detail->>'instance_type' AS instance_type, db_detail->>'version' as version FROM clup_db WHERE db_id = %s "
-    rows = dbapi.query(sql, (db_id, ))
-    if len(rows) == 0:
-        return -1, f'The database could not be found(db_id: {db_id})'
-    db = rows[0]
-    host = db['host']
-    # 先将旧的主库关闭
-    old_primary = dao.get_primary_db(db_id)[0]
-    err_code, err_msg = pg_db_lib.stop(old_primary)
-    if err_code != 0:
-        return -1, f'Failed to stop the primary database: {err_msg}'
-
-    # 下面代码已改用promote来提升备库为主库,无需再获取数据库版本
-    # if not db['version']:
-    #     err_code, err_msg = renew_pg_bin_info(db_id)
-    #     if err_code != 0:
-    #         return err_code, err_msg
-
-    # old_file = pgdata + '/recovery.conf'
-    # new_file = pgdata + '/recovery.done'
-
-    pgdata = db['pgdata']
-    err_code, err_msg = rpc_utils.get_rpc_connect(host, 2)
-    if err_code != 0:
-        return -1, f'Host connection failure(host: {host})'
-    rpc = err_msg
-    try:
-        # if int(str(version).split('.')[0]) >= 12:
-        err_code, err_msg = pg_db_lib.promote(rpc, pgdata)
-        # else:
-        #     err_code, err_msg = rpc.change_file_name(old_file, new_file)
-
-        if err_code < 0:
-            rpc.close()
-            return -1, err_msg
-
-        err_code, err_msg = pg_db_lib.restart(rpc, db['pgdata'])
-        msg = ''
-        if err_code != 0:
-            rpc.close()
-            msg = f'Database(db_id: {db_id}) restart failure: {err_msg} '
-            logging.error(f'set primary: {msg}.')
-    finally:
-        rpc.close()
-    # 修改完成启动旧的主库
-    err_code, err_msg = pg_db_lib.start(old_primary['host'], old_primary['pgdata'])
-    if err_code != 0:
-        return -1, f'The old database failed to start: {err_msg}'
-    sql = "UPDATE clup_db SET up_db_id = null, is_primary = 1 WHERE db_id = %s"
-    dbapi.execute(sql, (db_id,))
-    return 0, msg
-
-
 def sr_test_can_switch(old_pri_db, new_pri_db):
     """检查备库是否落后主库太多,如果备库需要的WAL已经不再主库上了,则不能切换
     Args:
@@ -684,7 +626,7 @@ def switch_over_db(old_pri_db, new_pri_db, task_id, pre_msg):
         return -1, err_msg
 
 
-def renew_pg_bin_info(db_id):
+def renew_pg_bin_info(db_id) -> Tuple[int, str, dict]:
     """
     更新PG数据库中与PG软件和操作系统相关的信息,如版本、os_user、os_uid、pg_bin_path等信息
     """
@@ -699,12 +641,12 @@ def renew_pg_bin_info(db_id):
 
     rows = dbapi.query(sql)
     if len(rows) == 0:
-        return -10, f'Database(db_id: {db_id}) does not exist, please refresh and try again.'
+        return -10, f'Database(db_id: {db_id}) does not exist, please refresh and try again.', {}
     db = rows[0]
 
     err_code, err_msg = rpc_utils.get_rpc_connect(db['host'])
     if err_code != 0:
-        return err_code, err_msg
+        return err_code, err_msg, {}
     rpc = err_msg
     renew_dict = {}
     try:
@@ -713,14 +655,14 @@ def renew_pg_bin_info(db_id):
         err_code, err_msg = rpc.os_stat(pgdata)
         if err_code != 0:
             err_msg = f"get file({pgdata}) stat failed: {err_msg}"
-            return err_code, err_msg
+            return err_code, err_msg, {}
         st_dict = err_msg
         os_uid = st_dict['st_uid']
         # 根据os_uid获得用户名称
         err_code, err_msg = rpc.pwd_getpwuid(os_uid)
         if err_code != 0:
             err_msg = f"get username by uid({os_uid}) failed: {err_msg}"
-            return err_code, err_msg
+            return err_code, err_msg, {}
         pw_dict = err_msg
         os_user = pw_dict['pw_name']
         renew_dict['os_user'] = os_user
@@ -744,7 +686,7 @@ def renew_pg_bin_info(db_id):
             cmd = f"su - {os_user} -c 'which postgres'"
             err_code, err_msg, out_msg = rpc.run_cmd_result(cmd)
             if err_code != 0:
-                return err_code, err_msg
+                return err_code, err_msg, {}
             out_msg = out_msg.strip()
             pg_bin_path = os.path.dirname(out_msg)
         if pg_bin_path:
@@ -753,7 +695,7 @@ def renew_pg_bin_info(db_id):
         #     pg_bin_path = db['pg_bin_path']
         err_code, err_msg = pg_db_lib.get_pg_bin_version(rpc, pg_bin_path)
         if err_code != 0:
-            return err_code, err_msg
+            return err_code, err_msg, {}
         version = err_msg
         renew_dict['version'] = version
     finally:
@@ -761,7 +703,7 @@ def renew_pg_bin_info(db_id):
     sql = "UPDATE clup_db set db_detail = db_detail || (%s::jsonb) WHERE db_id=%s"
     dbapi.execute(sql, (json.dumps(renew_dict), db_id))
     db.update(renew_dict)
-    return 0, db
+    return 0, '', db
 
 
 def get_db_params(up_db_id, standby_id):
@@ -796,15 +738,14 @@ def get_db_params(up_db_id, standby_id):
         "db_name": "template1"
     }
     if not primary['version']:
-        err_code, err_msg = renew_pg_bin_info(up_db_id)
+        err_code, err_msg, renew_dict = renew_pg_bin_info(up_db_id)
         if err_code != 0:
             return err_code, err_msg
-        renew_dict = err_msg
         pdict['version'] = renew_dict['version']
     return 0, pdict
 
 
-def pg_setting_list_to_dict(setting_list):
+def pg_setting_list_to_dict(setting_list) -> dict:
     setting_dict = dict()
     for conf in setting_list:
         sql = "SELECT setting_type FROM clup_init_db_conf WHERE setting_name=%s"
@@ -814,7 +755,7 @@ def pg_setting_list_to_dict(setting_list):
         else:
             setting_type = 1
 
-        if setting_type == 3 or setting_type == 4:
+        if setting_type in {3, 4}:
             # 带有单位的配置值
             if 'unit' not in conf:
                 if setting_type == 4:
@@ -840,7 +781,7 @@ def modify_setting_list(setting_list, pdict):
     if not setting_list:
         setting_list = []
     for s in setting_list:
-        if s['setting_name'] in pdict.keys():
+        if s['setting_name'] in pdict:
             s['val'] = pdict[s['setting_name']]
             del pdict[s['setting_name']]
     setting_list.extend([{"setting_name": k, "val": v} for k, v in pdict.items()])
@@ -848,7 +789,7 @@ def modify_setting_list(setting_list, pdict):
     return setting_list
 
 
-def get_db_conn(db_id):
+def get_db_conn(db_id) -> Tuple[int, str, Union[psycopg2.connection, None]]:
     """
     通过db_id 获取连接
     """
@@ -856,19 +797,19 @@ def get_db_conn(db_id):
           "db_detail->'db_pass' as db_pass  FROM clup_db WHERE db_id=%s"
     rows = dbapi.query(sql, (db_id,))
     if len(rows) == 0:
-        return -1, f"The instance(db_id={db_id}) does not exist."
+        return -1, f"The instance(db_id={db_id}) does not exist.", None
     db_dict = rows[0]
     db_dict['db_name'] = 'template1'
     try:
-        conn = dao.get_db_conn(db_dict)
-        if not conn or isinstance(conn, str):
-            return -1, f"Failed to connect to the database(host={db_dict['host']}, port={db_dict['port']})!"
+        err_code, err_msg, conn = dao.get_db_conn(db_dict)
+        if err_code != 0:
+            return -1, f"Failed to connect to the database(host={db_dict['host']}, port={db_dict['port']}): {err_msg}", None
     except Exception as e:
-        return -1, f'Failed to connect to the database: {str(e)}.'
-    return 0, conn
+        return -1, f'Failed to connect to the database: {str(e)}.', None
+    return 0, '', conn
 
 
-def check_sr_conn(db_id, up_db_id, repl_app_name=None):
+def check_sr_conn(db_id, up_db_id, repl_app_name=None) -> Tuple[int, str, dict]:
     """
     检查流复制连接, 如果传了repl_app_name参数就不需要再去查询了
     @param db_id:
@@ -883,9 +824,9 @@ def check_sr_conn(db_id, up_db_id, repl_app_name=None):
             return -1, f'No database(db_id={db_id}) information found', {}
         application_name = db[0]['repl_app_name']
     try:
-        err_code, conn = get_db_conn(up_db_id)
+        err_code, err_msg, conn = get_db_conn(up_db_id)
         if err_code != 0:
-            return err_code, f'Failed to obtain the database connection: {conn}', ''
+            return err_code, f'Failed to obtain the database connection: {err_msg}', {}
         sql = "SELECT count(*) AS cnt  FROM pg_stat_replication WHERE application_name=%s AND state='streaming'"
         rows = dao.sql_query(conn, sql, (application_name, ))
 
@@ -916,11 +857,19 @@ def check_auto_conf(host, pgdata, item_list):
 def alter_system_conf(db_id, k, v):
     try:
         db_dict = dao.get_db_conn_info(db_id)
-        conn = dao.get_db_conn(db_dict)
+    except Exception as e:
+        return -1, str(e)
+    err_code, err_msg, conn = dao.get_db_conn(db_dict)
+    if err_code != 0:
+        return err_code, err_msg
+
+    try:
         sql = f"""ALTER SYSTEM SET {k}="{v}" """
         dao.execute(conn, sql)
     except Exception as e:
         return -1, str(e)
+    finally:
+        conn.close()
     return 0, ""
 
 
@@ -936,29 +885,31 @@ def psql_test(db_id, sql):
     db_dict = dao.get_db_conn_info(db_id)
     if not db_dict:
         return -1, f'No information was found for database {db_id}'
-    try:
-        conn = dao.get_db_conn(db_dict)
-        if conn == '':
-            return -1, "CONN_ERROR: cant connect the database, maybe is not started."
-    except Exception as e:
-        return -1, "CONN_ERROR: " + str(e)
+    err_code, err_msg, conn = dao.get_db_conn(db_dict)
+    if err_code != 0:
+        return -1, f"CONN_ERROR: cant connect the database, maybe is not started: {err_msg}"
     try:
         rows = dao.sql_query(conn, sql)
     except Exception as e:
         return -1, "SQL_ERROR: " + str(e)
+    finally:
+        conn.close()
     return 0, rows
 
 
 def get_pg_tblspc_dir(db_id):
     db_dict = dao.get_db_conn_info(db_id)
     table_space = []
+    err_code, _err_msg, conn = dao.get_db_conn(db_dict)
+    if err_code != 0:
+        return []
     try:
-        conn = dao.get_db_conn(db_dict)
         sql = "SELECT spcname AS name, pg_catalog.pg_tablespace_location(oid) AS location FROM pg_catalog.pg_tablespace where spcname not in ('pg_default', 'pg_global');"
         table_space = dao.sql_query(conn, sql)
-        conn.close()
     except Exception as e:
         logging.error(f'get primary db info error: {repr(e)}')
+    finally:
+        conn.close()
     tblspc_dir = []
     for space in table_space:
         tblspc_dir.append({'old_dir': space['location'], 'new_dir': space['location']})
@@ -973,22 +924,12 @@ def get_pg_setting_name_type_dict():
         name_type_dict[row['setting_name']] = row['setting_type']
     return name_type_dict
 
-    # 通过sql查询当前正在使用的配置
-    # db_dict = dao.get_db_conn_info(db_id)
-    # conn = dao.get_db_conn(db_dict)
-    # rows = dao.sql_query(conn, 'SHOW ALL')
-    # setting_dict = {row['name']: row['setting'] for row in rows if row['name'] in data.keys()}
-    # data.update(setting_dict)
-
 
 def get_pg_setting_item_val(item):
     val = item['val']
     if isinstance(val, str):
         val = val.strip("'")
-    if 'unit' in item:
-        unit = item['unit']
-    else:
-        unit = ''
+    unit = item.get("unit", "")
 
     if unit == '':
         return val
@@ -1014,19 +955,21 @@ def get_pg_setting_item_val(item):
         return 3600 * 24 * 1000 * int(val)
 
 
-def get_all_settings(db_id, condition_dict=None, pg_version=None):
+def get_all_settings(db_id, condition_dict=None, pg_version=None) -> Tuple[int, str, list]:
     """
     读取数据库所有的参数,优先级:postgresql.auto.conf > postgresql.conf > pg_settings
     pg_version(int | None): 如果数据库处于停止状态，则查询clup_pg_settings表
     """
+    if condition_dict is None:
+        condition_dict = {}
 
     sql = "SELECT host, pgdata FROM clup_db WHERE db_id = %s"
     rows = dbapi.query(sql, (db_id, ))
     if not rows:
-        return -1, f'No database(db_id: {db_id}) information found'
+        return -1, f'No database(db_id: {db_id}) information found', []
     err_code, err_msg = rpc_utils.get_rpc_connect(rows[0]['host'])
     if err_code != 0:
-        return -1, f'agent connection failure: {err_msg}'
+        return -1, f'agent connection failure: {err_msg}', []
     rpc = err_msg
     try:
         # sql = "select category, name, setting, unit, vartype, context, enumvals, min_val, max_val, short_desc, extra_desc, pending_restart from pg_settings where true "
@@ -1050,13 +993,20 @@ def get_all_settings(db_id, condition_dict=None, pg_version=None):
                 f"max_val, short_desc, extra_desc, pending_restart FROM clup_pg_settings WHERE pg_version = {pg_version} AND {where_cond}"
             setting_rows = dbapi.query(f"{sql} {filter_cond}", tuple(args))
             if not setting_rows:
-                return -1, f"No records were found from clup_pg_settings for pg_version={pg_version}, please update it before use."
+                return -1, f"No records were found from clup_pg_settings for pg_version={pg_version}, please update it before use.", []
         else:
             # if db is running, connect db and select from pg_settings
             sql = f"SELECT * FROM pg_settings WHERE {where_cond} "
             db_dict = dao.get_db_conn_info(db_id)
-            conn = dao.get_db_conn(db_dict)
-            setting_rows = dao.sql_query(conn, f"{sql} {filter_cond}", tuple(args))
+            err_code, err_msg, conn = dao.get_db_conn(db_dict)
+            if err_code != 0:
+                return err_code, err_msg, []
+            try:
+                setting_rows = dao.sql_query(conn, f"{sql} {filter_cond}", tuple(args))
+            except Exception:
+                return -1, traceback.format_exc(), []
+            finally:
+                conn.close()
 
         pgdata = rows[0]['pgdata']
         conf_file = pgdata + '/postgresql.conf'
@@ -1070,13 +1020,13 @@ def get_all_settings(db_id, condition_dict=None, pg_version=None):
         # 读取配置文件中的配置
         err_code, data = rpc.read_config_file_items(conf_file, conf_list)
         if err_code != 0:
-            return -1, data
+            return -1, data, []
         is_exists = rpc.os_path_exists(pg_auto_conf_file)
         auto_data = None
         if is_exists:
             err_code, err_msg = rpc.read_config_file_items(pg_auto_conf_file, conf_list)
             if err_code != 0:
-                return -1, err_msg
+                return -1, err_msg, []
             auto_data = err_msg
         # postgresql.auto.conf中的优先级高,用postgresql.auto.conf覆盖postgresql.conf中的相同配置项
         if auto_data:
@@ -1096,10 +1046,10 @@ def get_all_settings(db_id, condition_dict=None, pg_version=None):
         for conf in all_conf_list:
             # 判断配置类型setting_type
             if conf['unit']:
-                if conf['unit'] in ['s', 'ms', 'min', 'h', 'd']:
+                if conf['unit'] in {'s', 'ms', 'min', 'h', 'd'}:
                     conf['setting_type'] = 4
                     conf['setting'] = int(conf['setting']) if conf['setting'].isdigit() else conf['setting']
-                elif conf['unit'] in ['B', 'KB', '8kB', 'kB', 'MB', 'GB', 'TB']:
+                elif conf['unit'] in {'B', 'KB', '8kB', 'kB', 'MB', 'GB', 'TB'}:
                     conf['setting_type'] = 3
                     conf['setting'] = int(conf['setting']) if conf['setting'].isdigit() else conf['setting']
                     # if conf['unit'] == '8kB':
@@ -1112,22 +1062,21 @@ def get_all_settings(db_id, condition_dict=None, pg_version=None):
                 else:
                     # 有单位但类型未知归为类型6
                     conf['setting_type'] = 6
+            elif conf['vartype'] == 'enum':
+                conf['setting_type'] = 5
+            elif conf['vartype'] == 'bool':
+                conf['setting_type'] = 2
+            elif conf['vartype'] == 'string':
+                conf['setting_type'] = 6
+                # real和integer归为类型1
+            elif conf['vartype'] == 'integer':
+                conf['setting'] = int(conf['setting'])
+                conf['setting_type'] = 1
+            elif conf['vartype'] == 'real':
+                conf['setting'] = float(conf['setting'])
+                conf['setting_type'] = 1
             else:
-                if conf['vartype'] in ['enum']:
-                    conf['setting_type'] = 5
-                elif conf['vartype'] in ['bool']:
-                    conf['setting_type'] = 2
-                elif conf['vartype'] in ['string']:
-                    conf['setting_type'] = 6
-                    # real和integer归为类型1
-                elif conf['vartype'] == 'integer':
-                    conf['setting'] = int(conf['setting'])
-                    conf['setting_type'] = 1
-                elif conf['vartype'] == 'real':
-                    conf['setting'] = float(conf['setting'])
-                    conf['setting_type'] = 1
-                else:
-                    conf['setting_type'] = 1
+                conf['setting_type'] = 1
 
             # 获取到的conf文件配置值装入列表
             conf_name = conf['name']
@@ -1138,7 +1087,7 @@ def get_all_settings(db_id, condition_dict=None, pg_version=None):
                 # 因为关联性配置导致取值disabled的或者配置文件未配置视为已生效
                 if conf['setting'] == '(disabled)' or not data[conf_name]:
                     conf['take_effect'] = 1
-                elif conf['unit'] in ['s', 'ms', 'min', 'h', 'd']:
+                elif conf['unit'] in {'s', 'ms', 'min', 'h', 'd'}:
                     conf_value = pg_utils.get_time_with_unit(conf['setting'], conf['unit'])
                     unit = ''.join([i for i in data[conf_name] if i.isalpha()])
                     val = data[conf_name].replace(unit, '')
@@ -1153,7 +1102,7 @@ def get_all_settings(db_id, condition_dict=None, pg_version=None):
                     conf['conf_unit'] = unit
                     conf['min_val'] = pg_utils.get_time_with_unit(conf['min_val'], conf['unit'])
                     conf['max_val'] = pg_utils.get_time_with_unit(conf['max_val'], conf['unit'])
-                elif conf['unit'] in ['B', 'KB', '8kB', 'kB', 'MB', 'GB', 'TB']:
+                elif conf['unit'] in {'B', 'KB', '8kB', 'kB', 'MB', 'GB', 'TB'}:
                     conf_value = pg_utils.get_val_with_unit(conf['setting'], conf['unit'])
                     unit = ''.join([i for i in data[conf_name] if i.isalpha()])
                     val = data[conf_name].replace(unit, '')
@@ -1188,10 +1137,10 @@ def get_all_settings(db_id, condition_dict=None, pg_version=None):
             # 需要重启的参数判断生效
             # if conf['pending_restart']:
             #     conf['take_effect'] = 0
-        return 0, all_conf_list
+        return 0, '', all_conf_list
     except Exception:
         err_msg = traceback.format_exc()
-        return -1, err_msg
+        return -1, err_msg, []
     finally:
         rpc.close()
 
@@ -1220,7 +1169,7 @@ def modify_db_conf(pdict):
         db_dict = rows[0]
 
         # 获取原有配置
-        err_code, err_msg = get_pg_setting_list(pdict['db_id'], setting_name=setting_name)
+        err_code, err_msg = get_pg_setting_list(pdict['db_id'], arg_setting_name=setting_name)
         if err_code != 0:
             return -1, f'The original configuration of the database({pdict["db_id"]}) cannot be obtained.error: {err_msg}'
 
@@ -1253,7 +1202,7 @@ def modify_db_conf(pdict):
         rpc.close()
 
 
-def get_pg_setting_list(db_id, fill_up_default=False, setting_name=None):
+def get_pg_setting_list(db_id, fill_up_default=False, arg_setting_name=None):
     """
     读取数据库配置参数,读取postgresql.conf和postgresql.auto.conf中的配置项目
     @param db_id:
@@ -1275,20 +1224,27 @@ def get_pg_setting_list(db_id, fill_up_default=False, setting_name=None):
             pg_auto_conf_file = pgdata + '/postgresql.auto.conf'
 
             where_cond = ""
-            if setting_name:
-                where_cond = f" WHERE setting_name='{setting_name}'"
+            if arg_setting_name:
+                where_cond = f" WHERE setting_name='{arg_setting_name}'"
             sql = f"SELECT setting_name, setting_type, val, unit, common_level FROM clup_init_db_conf {where_cond}"
             rows = dbapi.query(sql)
-            if not rows and setting_name:
+            if not rows and arg_setting_name:
                 # 有些参数在clup_init_db_conf中可能没有,那就在pg_settings中查
-                sql = f"SELECT name, setting, unit, vartype FROM pg_settings WHERE name = '{setting_name}'"
+                sql = f"SELECT name, setting, unit, vartype FROM pg_settings WHERE name = '{arg_setting_name}'"
                 # 暂时先按照csumdb(PG12)的版本为准,理论上应该查询指定的数据库
                 # result = dbapi.query(sql)
 
                 # 改为查询当前库，连接目标库查询设置
                 db_dict = dao.get_db_conn_info(db_id)
-                conn = dao.get_db_conn(db_dict)
-                result = dao.sql_query(conn, sql)
+                err_code, err_msg, conn = dao.get_db_conn(db_dict)
+                if err_code != 0:
+                    return err_code, err_msg
+                try:
+                    result = dao.sql_query(conn, sql)
+                except Exception:
+                    return -1, traceback.format_exc()
+                finally:
+                    conn.close()
                 setting_type_dict = dict()
                 if result:
                     setting_type_dict = {
@@ -1333,14 +1289,6 @@ def get_pg_setting_list(db_id, fill_up_default=False, setting_name=None):
                 name_type_dict[row['setting_name']] = row['setting_type']
                 name_clup_default_val_dict[row['setting_name']] = row
 
-            # # 通过sql查询默认值
-            # db_dict = dao.get_db_conn_info(db_id)
-            # conn = dao.get_db_conn(db_dict)
-            # rows = dao.sql_query(conn, 'select name,reset_val from pg_settings')
-            # setting_default_dict = {}
-            # for row in rows:
-            #     setting_default_dict[row['name']] = row['reset_val']
-
             err_code, data = rpc.read_config_file_items(conf_file, conf_list)
             if err_code != 0:
                 return -1, data
@@ -1360,7 +1308,7 @@ def get_pg_setting_list(db_id, fill_up_default=False, setting_name=None):
 
         setting_list = []
         # 存在参数是默认值,但是在配置文件已经被删除的情况
-        if setting_name and not data:
+        if arg_setting_name and not data:
             data = {
                 setting_name_dict["setting_name"]: setting_name_dict["val"]
             }
@@ -1369,11 +1317,11 @@ def get_pg_setting_list(db_id, fill_up_default=False, setting_name=None):
             conf = {"setting_name": setting_name, "val": value, "common_level": common_level, "is_string": False}
 
             # 如果已经不是字符串,就不要处理了。
-            if isinstance(data[setting_name], str):
+            if isinstance(value, str):
                 # 去掉前后的单引号
                 if len(value) >= 1:
                     if "'" in value:
-                        conf["val"] = data[setting_name].strip("'")
+                        conf["val"] = value.strip("'")
                 if conf_type_dict[setting_name] == 6:
                     conf["is_string"] = True
                 #     if data[setting_name][0] == "'":
@@ -1438,7 +1386,7 @@ def get_pg_setting_list(db_id, fill_up_default=False, setting_name=None):
         return -1, traceback.format_exc()
 
 
-def get_db_room(db_id):
+def get_db_room(db_id) -> Tuple[int, str, dict]:
     """
     从集群获取对应的机房名字
     @param db_id:
@@ -1447,15 +1395,15 @@ def get_db_room(db_id):
     sql = "SELECT db_detail->'room_id' as room_id, cluster_id FROM clup_db WHERE db_id=%s"
     rows = dbapi.query(sql, (db_id, ))
     if not rows:
-        return -1, f'No database(db_id: {db_id}) information found'
+        return -1, f'No database(db_id: {db_id}) information found', {}
     room_id = rows[0]['room_id'] if rows[0]['room_id'] else '0'
     cluster_id = rows[0]['cluster_id']
     if not cluster_id:
-        return 0, {"room_name": '默认机房', "room_id": '0'}
+        return 0, '', {"room_name": '默认机房', "room_id": '0'}
     sql = "SELECT cluster_data  FROM clup_cluster WHERE cluster_id = %s"
     rows = dbapi.query(sql, (cluster_id, ))
     if not rows:
-        return -1, f'No cluster(cluster_id: {cluster_id}) information found'
+        return -1, f'No cluster(cluster_id: {cluster_id}) information found', {}
     cluster_data = rows[0]['cluster_data']
     room_info = cluster_data.get('rooms', {})
     if not room_info or (room_id == '0' and not room_info.get(str(room_id))):
@@ -1467,7 +1415,7 @@ def get_db_room(db_id):
     else:
         room = room_info.get(str(room_id))
         room['room_id'] = room_id
-    return 0, room
+    return 0, '', room
 
 
 def get_new_cluster_data(cluster_id, room_id):
@@ -1553,7 +1501,7 @@ def get_max_lsn_db(db_list):
     return new_pri_pg
 
 
-def get_current_cluster_room(cluster_id):
+def get_current_cluster_room(cluster_id) -> Tuple[int, str, dict]:
     """
     获取集群当前机房信息
     @param cluster_id:
@@ -1562,22 +1510,24 @@ def get_current_cluster_room(cluster_id):
     sql = "SELECT cluster_data->'rooms' as rooms FROM clup_cluster WHERE cluster_id = %s"
     room_info_rows = dbapi.query(sql, (cluster_id, ))
     if not room_info_rows:
-        return f'No cluster(cluster_id: {cluster_id}) information found'
+        return -1, f'No cluster(cluster_id: {cluster_id}) information found', {}
     sql = "SELECT db_detail->'room_id' as room_id FROM clup_db WHERE cluster_id=%s AND is_primary=1"
     room_id_rows = dbapi.query(sql, (cluster_id, ))
     if not room_id_rows:
-        return f"Cluster(cluster_id={cluster_id}) primary database information is not found."
+        return -1, f"Cluster(cluster_id={cluster_id}) primary database information is not found.", {}
     rooms = room_info_rows[0]['rooms'] if room_info_rows[0]['rooms'] else {}
     cur_room_id = room_id_rows[0]['room_id']
     cur_room_id = cur_room_id if cur_room_id else '0'
     cur_room_info = rooms.get(str(cur_room_id), {})
     cur_room_info['room_id'] = cur_room_id
-    return cur_room_info
+    return 0, '', cur_room_info
 
 
 def get_db_relation_info(db_dict):
     for db in db_dict['children']:
-        err_code, room = get_db_room(db['db_id'])
+        err_code, err_code, room = get_db_room(db['db_id'])
+        if err_code != 0:
+            return
         db['room_name'] = room.get('room_name', '') if err_code == 0 else ''
         rows = dao.get_lower_db(db['db_id'])
         if rows:
@@ -1638,7 +1588,7 @@ def get_pg_ident(db_conn, host):
     code, result = rpc_utils.read_config_file(host, ident_file)
     if code != 0:
         return -1, f"Read the file({ident_file}) content from host({host}) failed, {result}."
-    ident_content = str(result, encoding='utf-8')
+    ident_content = result
 
     # filter content
     ident_content_list = list()
@@ -1672,40 +1622,39 @@ def get_user_names(db_conn):
     return 0, ret_list
 
 
-def get_pg_hba(db_id, db_conn=None, offset=None, limit=None):
+def get_pg_hba(db_id, db_conn=None, offset=None, limit=None) -> Tuple[int, str, list]:
     # check the pg_version,support PG10 and last version
     sql = "SELECT db_detail->'version' as version FROM clup_db WHERE db_id = %s"
     rows = dbapi.query(sql, (db_id, ))
     if not rows:
-        return -1, "Check the pg_version failed."
+        return -1, "Check the pg_version failed.", []
     pg_version = rows[0]['version']
     if float(pg_version) < 10:
-        return -1, "Only support for pg_version 10 or later."
+        return -1, "Only support for pg_version 10 or later.", []
 
     try:
         need_close = False
         if not db_conn:
             # connect the database
-            code, result = get_db_conn(db_id)
+            code, msg, db_conn = get_db_conn(db_id)
             if code != 0:
-                return -1, result
-            db_conn = result
+                return -1, msg, []
             need_close = True
 
         # query pg_hba info from the database
         sql = "SELECT * FROM pg_hba_file_rules OFFSET %s LIMIT %s"
         rows = dao.sql_query(db_conn, sql, (offset, limit))
         if not rows:
-            return -1, f"Execute sql({sql}) on database(db_id={db_id}) failed."
+            return -1, f"Execute sql({sql}) on database(db_id={db_id}) failed.", []
         ret_list = [dict(row) for row in rows]
 
     except Exception as e:
-        return -1, f"Search pg_hba rules with unexpected error, {str(e)}."
+        return -1, f"Search pg_hba rules with unexpected error, {str(e)}.", []
     finally:
         if need_close:
             db_conn.close()
 
-    return 0, ret_list
+    return 0, '', ret_list
 
 
 def backup_pg_hba(rpc, pgdata, backup_ident=False):
@@ -1803,13 +1752,13 @@ def delete_one_pg_hba(host, pgdata, line_number, is_reload=True):
     return 0, "Success"
 
 
-def check_pg_hba(db_id):
+def check_pg_hba(db_id) -> Tuple[int, str, list]:
     """检查pg_hba文件，如果有错误，则删除掉这一行，执行reload，然后返回错误信息
     """
     # get the pg_hba list
-    code, result = get_pg_hba(db_id)
+    code, msg, result = get_pg_hba(db_id)
     if code != 0:
-        return -1, result
+        return -1, msg, []
 
     # check error
     error_list = [hba_dict for hba_dict in result if hba_dict["error"]]
@@ -1818,7 +1767,7 @@ def check_pg_hba(db_id):
         sql = "SELECT host, pgdata FROM clup_db WHERE db_id=%s"
         rows = dbapi.query(sql, (db_id, ))
         if not rows:
-            return -1, f"Cant find any records from clup_db, where db_id={db_id}."
+            return -1, f"Cant find any records from clup_db, where db_id={db_id}.", []
 
         host = rows[0]['host']
         pgdata = rows[0]['pgdata']
@@ -1830,10 +1779,10 @@ def check_pg_hba(db_id):
             # delete from pg_hba
             code, result = delete_one_pg_hba(host, pgdata, error_list[index]['line_number'], is_reload)
             if code != 0:
-                return -1, result
+                return -1, result, []
         # return error_list
-        return 1, error_list
-    return 0, "Check over!"
+        return 1, '', error_list
+    return 0, '', []
 
 
 def update_pg_hba(pdict, option="update"):
@@ -1852,9 +1801,7 @@ def update_pg_hba(pdict, option="update"):
         value = pdict['conf_dict'].get(key, None)
         if not value:
             continue
-        if key == "database":
-            conf_str = f"{conf_str}{','.join(value)}\t"
-        elif key == "user_name":
+        if key in {"database", "user_name"}:
             conf_str = f"{conf_str}{','.join(value)}\t"
         elif key == "address":
             address = value
@@ -1901,7 +1848,7 @@ def update_pg_hba(pdict, option="update"):
                 return -1, f"Add content to file({hba_file}) failed, {err_msg}."
 
         # check pg_hba,is has error,delete the line
-        code, result = check_pg_hba(pdict['db_id'])
+        code, msg, result = check_pg_hba(pdict['db_id'])
         if code == 1:
             ret_error = ','.join([hba_dict['error'] for hba_dict in result])
             return -1, ret_error
@@ -1911,10 +1858,9 @@ def update_pg_hba(pdict, option="update"):
             need_add = True
 
             # get the db_conn
-            code, result = get_db_conn(pdict['db_id'])
+            code, msg, db_conn = get_db_conn(pdict['db_id'])
             if code != 0:
-                return -1, result
-            db_conn = result
+                return -1, msg
 
             # get the ident content,if not get the content,no care
             ident_content_list = list()
@@ -1956,12 +1902,12 @@ def update_pg_hba(pdict, option="update"):
     return 0, "Success"
 
 
-def get_child_node(db_id):
+def get_child_node(db_id) -> Tuple[int, str, list]:
     # get the child standby
     sql = "SELECT db_id, host, pgdata FROM clup_db WHERE up_db_id=%s"
     rows = dbapi.query(sql, (db_id, ))
     if not rows:
-        return 400, f"Cant find any child standby information for db_id={db_id}."
+        return 400, f"Cant find any child standby information for db_id={db_id}.", []
     child_node_list = [dict(row) for row in rows]
 
     # check the standby state
@@ -1977,15 +1923,14 @@ def get_child_node(db_id):
 
         del db_dict['pgdata']
 
-    return 0, child_node_list
+    return 0, '', child_node_list
 
 
 def reset_db_conf(db_id, setting_name):
     # get the db_conn
-    code, result = get_db_conn(db_id)
+    code, msg, db_conn = get_db_conn(db_id)
     if code != 0:
-        return -1, f"Connect the database(db_id={db_id}) failed, {result}."
-    db_conn = result
+        return -1, f"Connect the database(db_id={db_id}) failed, {msg}."
 
     try:
         # reset the setting
@@ -2043,9 +1988,9 @@ def enable_standby_sync(pdict):
         try:
             db_conn = None
             # get db_conn
-            code, db_conn = get_db_conn(row['db_id'])
+            code, msg, db_conn = get_db_conn(row['db_id'])
             if code != 0:
-                return -1, f"Connect the database(db_id={row['db_id']}) failed, {db_conn}."
+                return -1, f"Connect the database(db_id={row['db_id']}) failed, {msg}."
 
             # try to modify databse conf and reload
             alter_sql = f"ALTER SYSTEM SET {setting_name} = %s"
@@ -2074,9 +2019,9 @@ def enable_standby_sync(pdict):
     # run pg_reload_conf(),just reload primary database
     try:
         db_conn = None
-        code, db_conn = get_db_conn(pdict['db_id'])
+        code, msg, db_conn = get_db_conn(pdict['db_id'])
         if code != 0:
-            return -1, f"Connect the database(db_id={pdict['db_id']}) failed, {db_conn}."
+            return -1, f"Connect the database(db_id={pdict['db_id']}) failed, {msg}."
         reload_sql = "SELECT pg_reload_conf()"
         dao.execute(db_conn, reload_sql)
     except Exception:
@@ -2090,9 +2035,9 @@ def enable_standby_sync(pdict):
 
 def disable_standby_sync(db_id):
     # get child node list
-    code, result = get_child_node(db_id)
+    code, msg, result = get_child_node(db_id)
     if code != 0:
-        return -1, result
+        return -1, msg
     standby_info_list = result
 
     setting_value = None
@@ -2102,9 +2047,9 @@ def disable_standby_sync(db_id):
     # get the setting value and reset on primary database
     try:
         db_conn = None
-        code, db_conn = get_db_conn(db_id)
+        code, msg, db_conn = get_db_conn(db_id)
         if code != 0:
-            return -1, f"Connect the databse failed, {db_conn}."
+            return -1, f"Connect the databse failed, {msg}."
 
         # get the setting value
         query_sql = "SELECT setting FROM pg_settings WHERE name='synchronous_standby_names'"
@@ -2118,7 +2063,6 @@ def disable_standby_sync(db_id):
         dao.execute(db_conn, reset_sql)
 
         # run pg_reload_conf() Tip: alter system cant in a transaction block
-        code, db_conn = get_db_conn(db_id)
         dao.execute(db_conn, reload_sql)
     except Exception:
         return -1, f"Excute sql({reset_sql}) on the primary database with unexpected error, {traceback.format_exc()}."
@@ -2137,23 +2081,29 @@ def disable_standby_sync(db_id):
             failed_list.append(f"db_id={db_info['db_id']}: {db_info['host']}")
             continue
 
-        try:
-            db_conn = None
-            # get the db_conn, alter system cant in a transaction block
-            code, db_conn = get_db_conn(db_info['db_id'])
-            if code != 0:
+        # get the db_conn, alter system cant in a transaction block
+        code, msg, db_conn = get_db_conn(db_info['db_id'])
+        if code != 0:
+            failed_list.append(f"db_id={db_info['db_id']}: {db_info['host']}")
+        else:
+            try:
+                dao.execute(db_conn, reset_sql)
+            except Exception:
                 failed_list.append(f"db_id={db_info['db_id']}: {db_info['host']}")
-            dao.execute(db_conn, reset_sql)
+            finally:
+                if db_conn:
+                    db_conn.close()
 
             # run pg_reload_conf() Tip: alter system cant in a transaction block
-            code, db_conn = get_db_conn(db_id)
-            dao.execute(db_conn, reload_sql)
-        except Exception:
-            failed_list.append(f"db_id={db_info['db_id']}: {db_info['host']}")
-        finally:
-            if db_conn:
-                db_conn.close()
-
+            code, msg, db_conn = get_db_conn(db_id)
+            if code == 0:
+                try:
+                    dao.execute(db_conn, reload_sql)
+                except Exception:
+                    failed_list.append(f"db_id={db_info['db_id']}: {db_info['host']}")
+                finally:
+                    if db_conn:
+                        db_conn.close()
     if failed_list:
         return -1, f"Excute sql({reset_sql}) failed on ({','.join(failed_list)})."
 

@@ -22,23 +22,23 @@
 @description: PostgerSQL数据库探测模块
 """
 
-import os
-import json
-import queue
-import time
-import uuid
+import contextlib
 import ctypes
+import json
 import logging
-import threading
-import traceback
 import multiprocessing
-
-import psycopg2
-import psycopg2.extras
+import os
+import queue
+import threading
+import time
+import traceback
+import uuid
 
 import config
 import logger
 import pg_utils
+import psycopg2
+import psycopg2.extras
 
 g_q_request = None   # 进程间发送请求的队列
 g_q_reply = None     # 进程间接收已完成的命令的队列
@@ -214,10 +214,8 @@ def clean_expired_cmd(reply_queue):
                 p = cmd_dict['process']
                 del cmd_dict['process']
                 pid = p.pid
-                try:
+                with contextlib.suppress(OSError):
                     os.kill(pid, 9)
-                except OSError:
-                    pass
             logging.info(f"clean probe cmd({cmd_id}): {desensitized_args}")
             cmd_dict['run_end_time'] = time.time()
             cmd_dict['run_is_over'] = True
@@ -303,10 +301,8 @@ def probe_service(request_queue, reply_queue):
                 # 跨进程传递数据时，把process对象给删除掉
                 p = cmd_dict['process']
                 del cmd_dict['process']
-                try:
+                with contextlib.suppress(ChildProcessError):
                     p.join()
-                except ChildProcessError:
-                    pass
                 _target_args = cmd_dict['args']
                 cmd_type = cmd_dict['type']
                 desensitized_args = get_desensitized_args(cmd_dict)
@@ -379,8 +375,7 @@ def run_with_timeout(cmd_type, target_args, time_out=10):
     desensitized_args = get_desensitized_args(cmd_dict)
     # 保存到g_cmd_dict全局变量中
     save_cmd_dict(cmd_dict)
-
-    g_q_request.put(cmd_dict)
+    g_q_request.put(cmd_dict)  # type: ignore
     logging.debug(f"run probe cmd({cmd_dict['id']}) {desensitized_args} ...")
 
     begin_time = time.time()
@@ -392,7 +387,7 @@ def run_with_timeout(cmd_type, target_args, time_out=10):
             last_warn_time = curr_time
 
         try:
-            reply = g_q_reply.get_nowait()
+            reply = g_q_reply.get_nowait()  # type: ignore
             # 收到的reply，可能是别的线程中发的命令，没有关系，更新到g_cmd_dict中
             logging.debug(f"probe cmd({cmd_id}) get a reply({reply['id']})")
             update_cmd_data(reply)

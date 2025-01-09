@@ -57,7 +57,7 @@ def build_polar_standby(pdict, polar_type):
         if not up_db_dict:
             return -1, f'{step}: The superior database instance does not exist. Please check.'
         current_cluster_state = dao.get_cluster_state(up_db_dict["cluster_id"])
-        if current_cluster_state not in [cluster_state.OFFLINE, cluster_state.FAILED]:
+        if current_cluster_state not in {cluster_state.OFFLINE, cluster_state.FAILED}:
             err_msg = f"The superior database is in the cluster(cluster_id={up_db_dict['cluster_id']})," \
                 f"which cluster state is not OFFLINE or FAILED, cant create standby or reader database."
             return -1, err_msg
@@ -116,10 +116,9 @@ def build_polar_standby(pdict, polar_type):
             db_detail['delay'] = db_dict['delay']
 
         # 获取集群的polar_hostid
-        err_code, err_msg = polar_lib.get_cluster_polar_hostid(up_db_dict['cluster_id'])
+        err_code, err_msg, polar_hostid = polar_lib.get_cluster_polar_hostid(up_db_dict['cluster_id'])
         if err_code != 0:
             return -1, f"{step}: Get the polardb hostid failed, {err_msg}."
-        polar_hostid = err_msg
         db_detail['polar_hostid'] = polar_hostid
 
         insert_data_dict = dict()
@@ -243,12 +242,9 @@ def repair_polar_standby(task_id, pdict, polar_type):
         up_db_dict['setting_list'] = err_msg
 
         # 获取集群的polar_hostid
-        err_code, err_msg = polar_lib.get_db_polar_hostid(pdict['db_id'])
+        err_code, err_msg, polar_hostid = polar_lib.get_db_polar_hostid(pdict['db_id'])
         if err_code != 0:
             return -1, err_msg
-        if not err_msg.get('polar_hostid'):
-            return -1, f"{step} failed, cant get polardb hostid for database(db_id={pdict['db_id']})."
-        polar_hostid = int(err_msg['polar_hostid'])
 
         # db_dict存储往表clup_db中插入的数据
 
@@ -309,10 +305,10 @@ def change_recovery_up_db(db_id, up_db_id, polar_type):
     host = rows[0]['host']
     pgdata = rows[0]['pgdata']
 
-    if polar_type in ['reader', 'master']:
+    if polar_type in {'reader', 'master'}:
         # 启动pfs
         err_code, err_msg = polar_lib.start_pfs(host, db_id)
-        if err_code != 0 and err_code != 1:
+        if err_code not in {0, 1}:
             return -1, err_msg
 
     err_code, err_msg = pg_db_lib.restart(host, pgdata)
@@ -351,7 +347,7 @@ def recovery_standby(task_id, msg_prefix, recovery_host, pgdata):
             'polar_enable_shared_storage_mode'
         ]
         # edit the postgres.conf file
-        err_code, err_msg = pg_helpers.disable_settings(rpc, postgresql_conf, remove_conf_list)
+        err_code, err_msg = polar_lib.disable_settings(rpc, postgresql_conf, remove_conf_list)
         if err_code != 0:
             err_msg = f"""Restore file is ok, but edit the {postgresql_conf} failed,{err_msg},
             need disable the {remove_conf_list} by yourself.
@@ -362,7 +358,7 @@ def recovery_standby(task_id, msg_prefix, recovery_host, pgdata):
         rpc.modify_config_type1(postgresql_conf, {"polar_vfs.localfs_mode": "on"}, is_backup=False)
         # check postgres.auto.conf
         postgresql_auto_conf = f"{pgdata}/postgresql.auto.conf"
-        err_code, err_msg = pg_helpers.disable_settings(rpc, postgresql_auto_conf, remove_conf_list)
+        err_code, err_msg = polar_lib.disable_settings(rpc, postgresql_auto_conf, remove_conf_list)
         if err_code != 0:
             err_msg = f"""Restore file is ok, but edit the {postgresql_auto_conf} failed,{err_msg},
             need disable the {remove_conf_list} by yourself.

@@ -22,6 +22,8 @@
 @description: PostgerSQL数据库工具模块
 """
 
+from typing import Tuple
+
 import psycopg2
 import psycopg2.extras
 
@@ -121,7 +123,7 @@ def lsn_to_xlog_file_name(timeline, lsn, wal_segment_size):
     return f"{timeline:08X}{xlog_id:08X}{xlog_seg:08X}"
 
 
-def sql_query_dict(host, port, db, user, password, sql, binds=()):
+def sql_query_dict(host, port, db, user, password, sql, binds=()) -> Tuple[int, str, list]:
     """
     执行一条SQL语句
     :param sql: 字符串类型, 有绑定变量的SQL语句，如select * from table tablename where col1=%s and col2=%s;
@@ -136,9 +138,9 @@ def sql_query_dict(host, port, db, user, password, sql, binds=()):
         msg = cur.fetchall()
         cur.close()
         conn.close()
-        return 0, msg
+        return 0, '', msg
     except Exception as e:
-        return -1, str(e)
+        return -1, str(e), []
 
 
 def sql_exec(host, port, db, user, password, sql, binds=()):
@@ -198,7 +200,7 @@ def get_time_with_unit(val, unit):
     """
     获取时间的ms单位数值
     """
-    if unit == '' or unit == 'ms':
+    if unit in {'', 'ms'}:
         return int(val)
     elif unit == 's':
         return int(val) * 1000

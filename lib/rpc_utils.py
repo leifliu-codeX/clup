@@ -24,6 +24,7 @@
 
 import logging
 import traceback
+from typing import Any, Callable, Tuple, cast
 
 import config
 import csurpc
@@ -60,7 +61,8 @@ def rpc_or_host(a_func):
 
 def get_server_connect(host='127.0.0.1', conn_timeout=5):
     try:
-        rpc_pass = config.get('internal_rpc_pass')
+        rpc_pass = config.get('internal_rpc_pass', '')
+        rpc_pass = cast(str, rpc_pass)
         port = config.get('server_rpc_port')
         rpc_address = f"tcp://{host}:{port}"
         c1 = csurpc.Client()
@@ -70,15 +72,17 @@ def get_server_connect(host='127.0.0.1', conn_timeout=5):
         return -1, f"Can not connect {host}: {str(e)}"
 
 
-def get_rpc_connect(ip, conn_timeout=5, msg_callback=None):
+def get_rpc_connect(ip, conn_timeout=5, msg_callback=None) -> Tuple[int, Any]:
     try:
         rpc_port = config.get('agent_rpc_port')
         rpc_address = f"tcp://{ip}:{rpc_port}"
         c1 = csurpc.Client(msg_callback=msg_callback)
         if msg_callback:
             msg_callback(f"INFO: Connect to {ip}:{rpc_port} ...")
+        mypass = config.get('internal_rpc_pass', '')
+        mypass = cast(str, mypass)
         c1.connect(
-            rpc_address, password=config.get('internal_rpc_pass'),
+            rpc_address, password=mypass,
             conn_timeout=conn_timeout)
         if msg_callback:
             msg_callback(f"INFO: Connect to {ip}:{rpc_port} successfully.")
@@ -180,7 +184,7 @@ def extract_file(host, file_name, tar_path):
     return err_code, err_msg
 
 
-def read_config_file(host, file_name):
+def read_config_file(host, file_name) -> Tuple[int, str]:
     """
     读取文件内容
     """
@@ -189,6 +193,7 @@ def read_config_file(host, file_name):
         logging.error(f"Can not connect to {host}: maybe host is down.")
         return err_code, err_msg
     rpc = err_msg
+    err_msg = ''
     try:
         file_size = rpc.get_file_size(file_name)
         if file_size < 0:
@@ -204,6 +209,8 @@ def read_config_file(host, file_name):
         if err_code != 0:
             logging.error(f"Call rpc os_read_file failed: {err_msg}")
             return err_code, err_msg
+        if isinstance(err_msg, bytes):
+            err_msg = err_msg.decode()
     finally:
         rpc.close()
     return err_code, err_msg
@@ -268,6 +275,7 @@ def run_rpc_fun(func_name, *args, node_ip=None,
 
     func = getattr(client, func_name, None)
     try:
+        func = cast(Callable, func)
         result = func(*args, **kwargs)
     except Exception:
         err_str = f"call rpc func {func_name} failed with error:\n{traceback.format_exc()}"

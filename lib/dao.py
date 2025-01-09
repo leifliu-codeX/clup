@@ -25,12 +25,13 @@
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from typing import Tuple, Union
 
 import database_state
 import db_encrypt
 import dbapi
 import psycopg2
-
+import psycopg2.extras
 from rpc_utils import get_rpc_connect
 
 
@@ -68,11 +69,11 @@ def get_cluster_count():
     return cnt
 
 
-def get_cluster(cluster_id):
+def get_cluster(cluster_id) -> dict:
     sql = "SELECT * FROM clup_cluster WHERE cluster_id=%s"
     rows = dbapi.query(sql, (cluster_id,))
     if not rows:
-        return None
+        return {}
     row = rows[0]
     # 此处提取字典内部的值到外部
     row.update(row.pop('cluster_data'))
@@ -264,20 +265,14 @@ def set_cluster_db_state(cluster_id, db_id, state):
     rows = dbapi.query(
         "UPDATE clup_db SET state = %s WHERE cluster_id=%s and db_id = %s RETURNING state",
         (state, cluster_id, db_id))
-    if len(rows) < 1:
-        return False
-    else:
-        return True
+    return not len(rows) < 1
 
 
 def set_cluster_db_attr(cluster_id, db_id, attr, value):
     rows = dbapi.query(
         "UPDATE clup_db SET {col_name}=%s WHERE cluster_id=%s and db_id = %s RETURNING db_id".format(col_name=attr),
         (value, cluster_id, db_id))
-    if len(rows) < 1:
-        return False
-    else:
-        return True
+    return not len(rows) < 1
 
 
 def set_host_attr(ip, attr, value):
@@ -289,10 +284,7 @@ def set_host_attr(ip, attr, value):
         attr_dict = rows[0]['data']
         attr_dict[attr] = value
         rows = dbp.query("UPDATE clup_host SET data = %s WHERE ip=%s RETURNING ip", (value, ip))
-        if len(rows) < 1:
-            return False
-        else:
-            return True
+        return not len(rows) < 1
 
 
 def register_host(ip, hostname, mem_size, cpu_cores, cpu_threads, os_type):
@@ -451,7 +443,7 @@ def get_host_info(object_id):
     return rows
 
 
-def get_db_conn(db_dict):
+def get_db_conn(db_dict) -> Tuple[int, str, Union[psycopg2.connection, None]]:
     try:
         db_name = db_dict.get('db_name', 'template1')
         db_host = db_dict['host']
@@ -463,9 +455,9 @@ def get_db_conn(db_dict):
         else:
             db_pass = db_encrypt.from_db_text(db_dict['db_pass'])
         conn = psycopg2.connect(database=db_name, user=db_user, password=db_pass, host=db_host, port=db_port)
-        return conn
+        return 0, '', conn
     except Exception as e:
-        return str(e)
+        return -1, str(e), None
 
 
 def get_db_conn_info(db_id):

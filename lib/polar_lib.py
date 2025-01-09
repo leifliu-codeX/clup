@@ -26,6 +26,7 @@ import json
 import os
 import time
 import traceback
+from typing import Tuple
 
 import cluster_state
 import dao
@@ -210,7 +211,7 @@ class PolarCommon:
         up_db_repl_ip = up_db_info["repl_ip"]
 
         other_param = self.node_info.get('other_param')
-        other_param = ' -P -Xs ' if not other_param else other_param
+        other_param = other_param if other_param else " -P -Xs "
 
         param = f'polar_basebackup -h{up_db_repl_ip} -p{up_db_port} -U{repl_user} -D {self.pgdata} {other_param}'
         cmd = f"""su  - {self.os_user} -c "{param}" """
@@ -300,7 +301,7 @@ def start_pfs(host, db_id=None, pfs_dict=None):
             return err_code, err_msg
         rpc = err_msg
         err_code = rpc.run_cmd(cmd_start_pfsdaemon)
-        if err_code != 0 and err_code != 1:
+        if err_code not in {0, 1}:
             return err_code, "Start of pfsdaemon failed"
     except Exception:
         return -1, traceback.format_exc()
@@ -528,7 +529,7 @@ def edit_reader_postgresql_conf(rpc, node_info):
         reader_setting_dict['polar_hostid'] = node_info["polar_hostid"]
         reader_setting_dict['synchronous_standby_names'] = f"""'csu_replica{node_info["db_id"]}'"""
 
-        setting_list = [setting for setting in reader_setting_dict.keys()]
+        setting_list = [setting for setting in reader_setting_dict]
         err_code, err_msg = rpc.read_config_file_items(postgresql_conf, setting_list)
         if err_code != 0:
             return -1, err_msg
@@ -559,7 +560,7 @@ def edit_standby_postgresql_conf(rpc, node_info):
             "synchronous_standby_names": f"""'csu_standby{ node_info["db_id"] }'"""
         }
         postgresql_conf = f'{pgdata}/postgresql.conf'
-        setting_list = [setting for setting in standby_setting_dict.keys()]
+        setting_list = [setting for setting in standby_setting_dict]
         err_code, err_msg = rpc.read_config_file_items(postgresql_conf, setting_list)
         if err_code != 0:
             return -1, err_msg
@@ -799,17 +800,18 @@ def create_replication_slot(db_id):
             return -1, f"Get the instance database({node_info['up_db_id']}) connect information failed."
 
         # get the database connect
-        db_conn = dao.get_db_conn(up_db_info)
-        if not db_conn:
-            return -1, f"Connect the database instance(host={up_db_info['host']},port={up_db_info['port']}) failed."
-
-        # 查询当前的slot_name是否已经存在,已经存在的话就不需要创建了
-        sql = "SELECT slot_name FROM pg_replication_slots WHERE slot_name=%s"
-        rows = dbapi.conn_query(db_conn, sql, (slot_name, ))
-        if not rows:
-            sql = f"SELECT pg_create_physical_replication_slot('{slot_name}');"
-            dbapi.conn_execute(db_conn, sql)
-
+        err_code, err_msg, db_conn = dao.get_db_conn(up_db_info)
+        if err_code != 0:
+            return -1, f"Connect the database instance(host={up_db_info['host']},port={up_db_info['port']}) failed: {err_msg}"
+        try:
+            # 查询当前的slot_name是否已经存在,已经存在的话就不需要创建了
+            sql = "SELECT slot_name FROM pg_replication_slots WHERE slot_name=%s"
+            rows = dbapi.conn_query(db_conn, sql, (slot_name, ))
+            if not rows:
+                sql = f"SELECT pg_create_physical_replication_slot('{slot_name}');"
+                dbapi.conn_execute(db_conn, sql)
+        finally:
+            db_conn.close()
     except Exception:
         return -1, f"Create the replication slot with unexpected error, {traceback.format_exc()}."
 
@@ -842,16 +844,17 @@ def delete_replication_slot(db_id, is_self=False):
             return -1, f"Get the instance database({conn_db_id}) connect information failed."
 
         # get the database connect
-        db_conn = dao.get_db_conn(db_info)
-        if not db_conn:
-            return -1, f"Connect the database instance(host={db_info['host']},port={db_info['port']}) failed."
-
-        sql = "SELECT slot_name FROM pg_replication_slots WHERE slot_name=%s"
-        rows = dbapi.conn_query(db_conn, sql, (slot_name, ))
-        if rows:
-            db_conn = dao.get_db_conn(db_info)
-            sql = f"SELECT pg_drop_replication_slot('{slot_name}');"
-            dbapi.conn_execute(db_conn, sql)
+        err_code, err_msg, db_conn = dao.get_db_conn(db_info)
+        if err_code != 0:
+            return -1, f"Connect the database instance(host={db_info['host']},port={db_info['port']}) failed: {err_msg}"
+        try:
+            sql = "SELECT slot_name FROM pg_replication_slots WHERE slot_name=%s"
+            rows = dbapi.conn_query(db_conn, sql, (slot_name, ))
+            if rows:
+                sql = f"SELECT pg_drop_replication_slot('{slot_name}');"
+                dbapi.conn_execute(db_conn, sql)
+        finally:
+            db_conn.close()
 
     except Exception:
         return -1, f"Delete the replication slot with unexpected error, {traceback.format_exc()}."
@@ -1301,17 +1304,17 @@ def stop_immediate(host, pgdata, _wait_time=0):
             rpc.close()
 
 
-def get_cluster_polar_hostid(cluster_id):
+def get_cluster_polar_hostid(cluster_id) -> Tuple[int, str, int]:
     """获取集群的polar_hostid
     """
     sql = f"SELECT cluster_data->'polar_hostid' as polar_hostid FROM clup_cluster WHERE cluster_id = {cluster_id} "
     rows = dbapi.query(sql)
     if not len(rows):
-        return -1, f"Failed to get the 'polar_hostid' of the cluster(cluster_id={cluster_id})."
+        return -1, f"Failed to get the 'polar_hostid' of the cluster(cluster_id={cluster_id}).", 0
     polar_hostid = rows[0].get("polar_hostid")
     if not polar_hostid:
-        return -1, f"Failed to get polar_hostid, please modify the polar_hostid for the cluster(cluster_id={cluster_id}) information first."
-    return 0, int(polar_hostid)
+        return -1, f"Failed to get polar_hostid, please modify the polar_hostid for the cluster(cluster_id={cluster_id}) information first.", 0
+    return 0, '', int(polar_hostid)
 
 
 def update_cluster_polar_hostid(cluster_id, polar_hostid):
@@ -1322,14 +1325,14 @@ def update_cluster_polar_hostid(cluster_id, polar_hostid):
     dbapi.execute(sql, (update_dict, cluster_id))
 
 
-def get_db_polar_hostid(db_id):
+def get_db_polar_hostid(db_id) -> Tuple[int, str, int]:
     """获取数据库的polar_hostid
     """
     sql = f"SELECT db_detail->'polar_hostid' as polar_hostid FROM clup_db WHERE db_id = {db_id} "
     rows = dbapi.query(sql)
     if not len(rows):
-        return -1, f"Failed to get the 'polar_hostid' of the database(db_id={db_id})."
-    return 0, rows[0]
+        return -1, f"Failed to get the 'polar_hostid' of the database(db_id={db_id}).", -1
+    return 0, '', int(rows[0]['polar_hostid'])
 
 
 def search_polar_hostid(rpc, pgdata):
@@ -1537,7 +1540,7 @@ def check_pfs_disk_name_validity(host_list, pfs_disk_name):
     pfs_disk_formated = False
     for host in host_list:
         code, result = check_disk_on_host(host, pfs_disk_name)
-        if code != 0 and code != 1:
+        if code not in {0, 1}:
             failed_host_msg.append(result)
         elif code == 0:
             pfs_disk_formated = True
@@ -1752,7 +1755,7 @@ def pfs_growfs(db_info, pfs_disk_name, current_chunks, target_chunks):
     return 0, "Growfs success"
 
 
-def get_polar_major_version(db_id):
+def get_polar_major_version(db_id) -> Tuple[int, str, int]:
     """获取PolarDB的主版本号
 
     Args:
@@ -1761,11 +1764,47 @@ def get_polar_major_version(db_id):
     sql = "SELECT db_detail->'version' as version FROM clup_db WHERE db_id=%s"
     rows = dbapi.query(sql, (db_id, ))
     if not rows:
-        return -1, f"Cant find any records for the instance(db_id={db_id})."
+        return -1, f"Cant find any records for the instance(db_id={db_id}).", 0
 
     version = rows[0]["version"]
     if not version:
-        return -1, f"Get the version for the instance(db_id={db_id}) failed."
+        return -1, f"Get the version for the instance(db_id={db_id}) failed.", 0
 
     major_version = int(version.split(".")[0])
-    return 0, major_version
+    return 0, '', major_version
+
+
+def disable_settings(rpc, file, remove_conf_list):
+    """disable the conf from file
+
+    Args:
+        file (_type_): _description_
+        remove_conf_list (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+    file_size = rpc.get_file_size(file)
+    if file_size < 0:
+        return 200, json.dumps({"err_code": -1, "err_msg": f'Failed to get the file size:(file_name={file})'})
+
+    err_code, err_msg = rpc.os_read_file(file, 0, file_size)
+    if err_code != 0:
+        return 200, json.dumps({"err_code": -1, "err_msg": f'Failed to obtain the file content:(file_name={file})'})
+    lines = err_msg.decode().split('\n')
+    new_content = ''
+    for line in lines:
+        is_remove = False
+        for remove_conf in remove_conf_list:
+            if remove_conf in line:
+                is_remove = True
+                break
+        if is_remove:
+            new_content = f"{new_content}#{line}\n"
+            continue
+        else:
+            new_content = f"{new_content}{line}\n"
+    err_code, err_msg = rpc.os_write_file(file, 0, new_content.encode())
+    if err_code != 0:
+        return err_code, err_msg
+    return 0, "Success"

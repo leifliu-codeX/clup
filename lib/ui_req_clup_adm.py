@@ -23,28 +23,27 @@
 @description: WEB界面的CLup自身管理接口后端服务处理模块
 """
 
-import os
 import json
 import logging
+
 # agent_log
 import math
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import agent_logger
 import config
 import csu_http
 import dbapi
+import general_task_mgr
 import ip_lib
 import logger
-import rpc_utils
 import long_term_task
-import general_task_mgr
+import rpc_utils
 import task_type_def
-
 from pg_db_lib import is_running
 from pg_helpers import get_all_settings
 from zqpool_helpers import conf_sort as zqpool_conf_sort
-
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 def get_clup_host_list(req):
@@ -52,9 +51,9 @@ def get_clup_host_list(req):
     获取clup主机列表
     """
     params = {}
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, _pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     # 获取自己的ip地址
     nic_dict = ip_lib.get_nic_ip_dict()
@@ -97,9 +96,9 @@ def get_log_level_list(req):
     }
 
     # 检查参数的合法性，如果成功，把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     log_level_name_dict = logger.get_log_level_name_dict()
 
@@ -131,9 +130,9 @@ def set_log_level(req):
         'level_name': csu_http.MANDATORY
     }
     # 检查参数的合法性，如果成功，把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     log_type = pdict['log_type']
     if log_type == 'main':
         log_type = ''
@@ -159,9 +158,9 @@ def get_agent_log_level_list(req):
     }
 
     # 检查参数的合法性，如果成功，把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     where_cond = ''
     if 'filter' in pdict:
@@ -250,9 +249,9 @@ def set_agent_log_level(req):
         'level_name': csu_http.MANDATORY
     }
     # 检查参数的合法性，如果成功，把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     log_type = pdict['log_type']
     if log_type == 'main':
         log_type = ''
@@ -290,9 +289,9 @@ def get_clup_settings(req):
     }
 
     # 检查参数的合法性，如果成功，把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     try:
         where_cond = ' WHERE category >=10'
@@ -323,9 +322,9 @@ def update_clup_settings(req):
         'content': csu_http.MANDATORY,
     }
     # 检查参数的合法性，如果成功，把参数放到一个字典中
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
     try:
         sql = "UPDATE clup_settings SET content=%(content)s WHERE key=%(key)s"
         dbapi.execute(sql, pdict)
@@ -345,9 +344,9 @@ def get_pg_settings(req):
         'pg_version': 0,
         'filter': 0,
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     # get all pg version are setted or not
     sql = "SELECT DISTINCT(pg_version), COUNT(*) FROM clup_pg_settings group by pg_version"
@@ -407,9 +406,9 @@ def update_pg_settings(req):
         'db_id': csu_http.MANDATORY,
         'pg_version': csu_http.MANDATORY | csu_http.INT
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     # check and get the db infor
     sql = "SELECT host, pgdata, port, db_detail->>'version' as version FROM clup_db WHERE db_id = %s"
@@ -428,9 +427,9 @@ def update_pg_settings(req):
     dbapi.execute(delete_sql, (int(pdict['pg_version']), ))
 
     # Insert new settings
-    code, result = get_all_settings(pdict['db_id'], {})
+    code, msg, result = get_all_settings(pdict['db_id'], {})
     if code != 0:
-        return 400, f"Get the database(db_id={pdict['db_id']}) pg_settings failed, {result}."
+        return 400, f"Get the database(db_id={pdict['db_id']}) pg_settings failed, {msg}."
 
     try:
         for setting_dict in result:
@@ -439,7 +438,7 @@ def update_pg_settings(req):
                 if key in setting_dict:
                     del setting_dict[key]
             setting_dict["pg_version"] = pdict["pg_version"]
-            columns = ', '.join([key for key in setting_dict.keys()])
+            columns = ', '.join([key for key in setting_dict])
             values = ', '.join(['%s'] * len(setting_dict.keys()))
             inster_sql = f"INSERT INTO clup_pg_settings ({columns}) VALUES({values}) ON CONFLICT DO NOTHING"
             dbapi.execute(inster_sql, tuple(setting_dict.values()))
@@ -465,9 +464,9 @@ def add_csu_package(req):
         'settings': csu_http.MANDATORY,
         'conf_init': csu_http.MANDATORY
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     # check the packages is exists or not
     sql = "SELECT * FROM csu_packages WHERE package_name = %s and version = %s"
@@ -503,9 +502,9 @@ def install_csu_package(req):
         'root_path': csu_http.MANDATORY,
         'host_list': csu_http.MANDATORY
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     # search the package info
     sql = "SELECT * FROM csu_packages WHERE package_id = %s"
@@ -539,9 +538,9 @@ def get_csu_package_info(req):
     params = {
         "package_name": csu_http.MANDATORY
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     where_cond = None
     if pdict['package_name'] != "":

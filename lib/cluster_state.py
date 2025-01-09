@@ -52,10 +52,7 @@ def to_str(state):
 
 def is_valid(state):
     global __state_dict
-    if state in __state_dict:
-        return True
-    else:
-        return False
+    return state in __state_dict
 
 
 def get_dict():

@@ -22,15 +22,13 @@
 @description: WEB界面的zqpool管理后端服务处理模块
 """
 
-import os
 import json
-
-import dbapi
-import csu_http
-
-import zqpool_helpers
-
+import os
 from copy import deepcopy
+
+import csu_http
+import dbapi
+import zqpool_helpers
 
 
 def get_zqpool_list(req):
@@ -40,9 +38,9 @@ def get_zqpool_list(req):
         'filter': csu_http.MANDATORY
     }
 
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     offset = (pdict['page_num'] - 1) * pdict['page_size']
     if pdict['filter'] != "":
@@ -90,9 +88,9 @@ def create_zqpool(req):
         'mgr_token': csu_http.MANDATORY,
         'exporter_port': csu_http.MANDATORY
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     # check the zqpool is exist
     sql = "SELECT zqpool_id FROM csu_zqpool WHERE host = %s AND conf_data->>'mgr_port' = '%s'"
@@ -122,9 +120,9 @@ def add_zqpool(req):
         'root_path': csu_http.MANDATORY,
         'zqpool_name': csu_http.MANDATORY
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     code, result = zqpool_helpers.add_zqpool(pdict)
     if code != 0:
@@ -137,9 +135,9 @@ def online_zqpool(req):
     params = {
         'zqpool_id': csu_http.INT
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     code, result = zqpool_helpers.control_zqpool(pdict['zqpool_id'], option='start')
     if code != 0:
@@ -152,9 +150,9 @@ def offline_zqpool(req):
     params = {
         'zqpool_id': csu_http.INT
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     code, result = zqpool_helpers.control_zqpool(pdict['zqpool_id'], option='stop')
     if code != 0:
@@ -176,9 +174,9 @@ def update_zqpool_info(req):
         'mgr_token': csu_http.MANDATORY,
         'exporter_port': csu_http.MANDATORY
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     # check the zqpool is exist
     sql = "SELECT zqpool_id, host, root_path, conf_data FROM csu_zqpool WHERE zqpool_id = %s"
@@ -215,9 +213,9 @@ def delete_zqpool(req):
     params = {
         'zqpool_id': csu_http.INT
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     err_msg = None
     # need delete the service file
@@ -248,9 +246,9 @@ def add_pool(req):
         'zqpool_id': csu_http.INT,
         'conf_dict': csu_http.MANDATORY
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     zqpool_id = pdict['zqpool_id']
 
@@ -291,9 +289,9 @@ def delete_pool(req):
     params = {
         'pool_id': csu_http.INT
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     code, result = zqpool_helpers.delete_pool(pdict['pool_id'])
     if code != 0:
@@ -316,9 +314,9 @@ def get_pool_list(req):
         'page_size': csu_http.INT,
         'filter': csu_http.MANDATORY
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     code, result = zqpool_helpers.get_pool_list(pdict['filter'])
     if code != 0:
@@ -346,9 +344,9 @@ def modify_pool_info(req):
         'option': csu_http.MANDATORY,
         'settings': csu_http.MANDATORY
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     # check the pool is exist or not
     sql = "SELECT pool_id FROM csu_zqpool_pools WHERE pool_id = %s"
@@ -374,9 +372,9 @@ def get_portals_list(req):
         'page_size': csu_http.INT,
         'filter': csu_http.MANDATORY
     }
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     sql = """SELECT zq.zqpool_id, pool_id, host, pool_fe,
         zq.conf_data->'mgr_port' as mgr_port,
@@ -430,9 +428,9 @@ def get_zqpool_log_content(req):
         "read_size": csu_http.INT
     }
     # check request params
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     code, result = zqpool_helpers.get_zqpool_log_content(pdict)
     if code != 0:
@@ -446,9 +444,9 @@ def get_zqpool_log_level(req):
         "zqpool_id": csu_http.INT
     }
     # check request params
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     code, result = zqpool_helpers.get_log_level(pdict['zqpool_id'])
     if code != 0:
@@ -463,9 +461,9 @@ def set_zqpool_log_level(req):
         "log_level": csu_http.MANDATORY
     }
     # check request params
-    err_code, pdict = csu_http.parse_parms(params, req)
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
-        return 400, pdict
+        return 400, err_msg
 
     code, result = zqpool_helpers.set_log_level(pdict['zqpool_id'], pdict['log_level'])
     if code != 0:

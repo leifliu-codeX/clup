@@ -28,6 +28,7 @@ import logging
 import os
 import time
 import traceback
+from typing import cast
 
 import cluster_state
 import config
@@ -131,15 +132,13 @@ def get_repl_delay(cluster_id):
                     'db_pass': db_pass,
                     'real_pass': True
                 }
-                try:
-                    conn = dao.get_db_conn(db_dict)
 
-                    # 从主库获取current_wal
-                    cur_wal_rows = dao.get_current_wal_lsn(conn)
-                except Exception as e:
-                    logging.error(f'get current wal lsn ERROR: {repr(e)}')
+                err_code, err_msg, conn = dao.get_db_conn(db_dict)
+                if err_code != 0:
+                    logging.error(f'get current wal lsn ERROR: {err_msg}')
                     cur_wal_rows = []
                 else:
+                    cur_wal_rows = dao.get_current_wal_lsn(conn)
                     conn.close()
                 if cur_wal_rows:
                     cur_wal = cur_wal_rows[0]['cur_wal']
@@ -216,7 +215,7 @@ def can_be_failback(cluster_id: str, db_id: int):
         return 1, f"can_be_failback when cluster({cluster_id}) has been deleted"
 
     state = cluster_dict['state']
-    if state == cluster_state.REPAIRING or state == cluster_state.FAILOVER or state == cluster_state.CHECKING:
+    if state in {cluster_state.REPAIRING, cluster_state.FAILOVER, cluster_state.CHECKING}:
         str_state = cluster_state.to_str(state)
         err_msg = f"Cluster is being operated on(state={str_state}). Please try repairing the node later!"
         logging.info(f"{pre_msg}:{err_msg}")
@@ -334,7 +333,7 @@ def failback(task_id: int, db_dict, restore_cluster_state):
         version = str(pri_db_dict['version'])
         # 没有版本信息或os_user信息或pg_bin_path信息，则获得这些信息并更新数据库
         if (not version) or (not pri_db_dict['os_user']) or (not pri_db_dict['pg_bin_path']):
-            err_code, renew_dict = pg_helpers.renew_pg_bin_info(db_id)
+            err_code, err_msg, renew_dict = pg_helpers.renew_pg_bin_info(db_id)
             if err_code != 0:
                 return err_code, err_msg
             pri_db_dict.update(renew_dict)
@@ -397,6 +396,7 @@ def failback(task_id: int, db_dict, restore_cluster_state):
         if err_code != 0:
             err_msg = f'{msg_prefix}: failed to checking failback database replication steaming: {data}'
             return err_code, err_msg
+        data = cast(list, data)
         if data[0]['cnt'] > 0:
             err_msg = 'Repair succeeded.'
 
@@ -419,6 +419,7 @@ def failback(task_id: int, db_dict, restore_cluster_state):
         if err_code != 0:
             err_msg = f'{msg_prefix}: Failed to retrieve database information: {pdict}'
             return err_code, err_msg
+        pdict = cast(dict, pdict)
         pdict['task_id'] = task_id
         pdict['msg_prefix'] = msg_prefix
         pdict['task_type'] = 'ha'
@@ -526,7 +527,7 @@ def failback(task_id: int, db_dict, restore_cluster_state):
             if err_code != 0:
                 err_msg = f'{msg_prefix}: failed to get unix_socket_directories: {rows}'
                 return err_code, err_msg
-
+            rows = cast(list, rows)
             unix_socket_directories = rows[0]['setting']
             cells = unix_socket_directories.split(',')
             unix_socket_dir = cells[0].strip()
@@ -574,7 +575,6 @@ def failback(task_id: int, db_dict, restore_cluster_state):
         dao.set_cluster_state(cluster_id, restore_cluster_state)
         dao.update_db_state(db_id, db_state)
         dao.set_node_state(db_id, n_state)
-        return -1, err_msg
 
 
 def test_sr_can_switch(cluster_id, db_id: int, primary_db, keep_cascaded=False):
@@ -595,7 +595,7 @@ def test_sr_can_switch(cluster_id, db_id: int, primary_db, keep_cascaded=False):
         logging.info(f"test_sr_can_switch when cluster({cluster_id}) has been deleted")
         return 1, f"cluster({cluster_id}) has been deleted"
     state = cluster_dict['state']
-    if state != cluster_state.NORMAL and state != cluster_state.OFFLINE:
+    if state not in {cluster_state.NORMAL, cluster_state.OFFLINE}:
         err_msg = "The cluster is not in Online or Offline status, so it cannot be switched!"
         logging.info(f"{pre_msg}:{err_msg}")
         return -1, err_msg
@@ -709,9 +709,9 @@ def sr_switch(task_id, cluster_id, db_id, primary_db, keep_cascaded=False):
             logging.info(msg)
             general_task_mgr.complete_task(task_id, -1, f"cluster({cluster_id}) has been deleted")
             return -1, msg
-        err_code, db_room = pg_helpers.get_db_room(db_id)
+        err_code, err_msg, db_room = pg_helpers.get_db_room(db_id)
         if err_code != 0:
-            err_msg = f"Failed to obtain database(db_id={db_id}) room information: {db_room}"
+            err_msg = f"Failed to obtain database(db_id={db_id}) room information: {err_msg}"
             general_task_mgr.complete_task(task_id, -1, err_msg)
             return -1, err_msg
 
@@ -742,13 +742,12 @@ def sr_switch(task_id, cluster_id, db_id, primary_db, keep_cascaded=False):
         # 12以上版本需要考虑postgresql.auto.conf文件是否存在primary_conninfo配置
         for db_dict in clu_db_list:
             if 'version' not in db_dict:
-                err_code, err_msg = pg_helpers.renew_pg_bin_info(db_id)
+                err_code, err_msg, renew_dict = pg_helpers.renew_pg_bin_info(db_id)
                 if err_code != 0:
                     err_msg = f"Get the db version failed, {err_msg}."
                     log_error(task_id, f"{pre_msg}: {err_msg}")
                     general_task_mgr.complete_task(task_id, -1, err_msg)
                     return -1, err_msg
-                renew_dict = err_msg
                 version = str(renew_dict['version'])
             else:
                 version = str(db_dict['version'])
@@ -876,7 +875,7 @@ def sr_switch(task_id, cluster_id, db_id, primary_db, keep_cascaded=False):
             if old_conninfo_dict:
                 # 如果前面改了postgresql.auto.conf文件，需要回滚
                 for db in clu_db_list:
-                    if db['db_id'] not in old_conninfo_dict.keys():
+                    if db['db_id'] not in old_conninfo_dict:
                         continue
                     pg_helpers.alter_system_conf(db_dict['db_id'], "primary_conninfo", old_conninfo_dict[db['db_id']])
                     # 重启数据库
@@ -941,17 +940,20 @@ def sr_switch(task_id, cluster_id, db_id, primary_db, keep_cascaded=False):
 
         log_info(task_id, f'{pre_msg}: promote new primary completed.')
 
-        err_code, rooms = pg_helpers.get_db_room(db_id)
-        vip = rooms.get('vip', vip) if err_code == 0 else vip
-        log_info(task_id, f"{pre_msg}: add primary vip({vip}) to new primary({new_pri_db['host']}) ...")
-        try:
-            rpc_utils.check_and_add_vip(new_pri_db['host'], vip)
-            # update clup_used_vip
-            dbapi.execute("UPDATE clup_used_vip SET db_id=%s,used_reason=1 WHERE vip=%s", (new_pri_db['db_id'], vip))
-            log_info(task_id, f"{pre_msg}: add primary vip({vip}) to new primary({new_pri_db['host']}) completed.")
-        except Exception:
-            log_error(task_id, f"{pre_msg} : unexpected error occurred during add vip ({vip}) "
-                               f"to new primary({new_pri_db['host']}): {traceback.format_exc()}")
+        err_code, err_msg, rooms = pg_helpers.get_db_room(db_id)
+        if err_code != 0:
+            log_error(task_id, f"{pre_msg}: can not get room: {err_msg}")
+        else:
+            vip = rooms.get('vip', vip) if err_code == 0 else vip
+            log_info(task_id, f"{pre_msg}: add primary vip({vip}) to new primary({new_pri_db['host']}) ...")
+            try:
+                rpc_utils.check_and_add_vip(new_pri_db['host'], vip)
+                # update clup_used_vip
+                dbapi.execute("UPDATE clup_used_vip SET db_id=%s,used_reason=1 WHERE vip=%s", (new_pri_db['db_id'], vip))
+                log_info(task_id, f"{pre_msg}: add primary vip({vip}) to new primary({new_pri_db['host']}) completed.")
+            except Exception:
+                log_error(task_id, f"{pre_msg} : unexpected error occurred during add vip ({vip}) "
+                                f"to new primary({new_pri_db['host']}): {traceback.format_exc()}")
 
         old_pri_db['is_primary'] = 0
         new_pri_db['is_primary'] = 1
@@ -1039,7 +1041,7 @@ def test_polar_can_switch(cluster_id, db_id, old_primary_db_id):
         return 1, f"cluster({cluster_id}) has been deleted"
 
     state = cluster_dict['state']
-    if state != cluster_state.NORMAL and state != cluster_state.OFFLINE:
+    if state not in {cluster_state.NORMAL, cluster_state.OFFLINE}:
         err_msg = "The cluster is not in Online or Offline status, so it cannot be switched!!"
         logging.info(f"{pre_msg}:{err_msg}")
         return -1, err_msg
@@ -1114,9 +1116,9 @@ def polar_switch(task_id, cluster_id, new_pri_db_id, old_pri_db_id):
             msg = f"cluster({cluster_id}) has been deleted"
             logging.info(msg)
             return -1, msg
-        err_code, db_room = pg_helpers.get_db_room(new_pri_db_id)
+        err_code, err_msg, db_room = pg_helpers.get_db_room(new_pri_db_id)
         if err_code != 0:
-            err_msg = f"Failed to obtain database(db_id={new_pri_db_id}) room information: {db_room}"
+            err_msg = f"Failed to obtain database(db_id={new_pri_db_id}) room information: {err_msg}"
             return -1, err_msg
 
         before_cluster_dict = pg_helpers.get_new_cluster_data(cluster_id, db_room['room_id'])
@@ -1172,18 +1174,21 @@ def polar_switch(task_id, cluster_id, new_pri_db_id, old_pri_db_id):
                 log_info(task_id, f"{pre_msg}: delete vip({vip}) from host({old_pri_db_dict['host']}) with unexpected error,{traceback.format_exc()}.")
 
         # 获取新主库的房间信息
-        err_code, rooms = pg_helpers.get_db_room(new_pri_db_id)
-        vip = rooms.get('vip', vip) if err_code == 0 else vip
-        log_info(task_id, f"{pre_msg}: add primary vip({vip}) to new primary({new_pri_db_dict['host']}) ...")
-        try:
-            rpc_utils.check_and_add_vip(new_pri_db_dict['host'], vip)
-            # update clup_used_vip
-            dbapi.execute("UPDATE clup_used_vip SET db_id=%s,used_reason=1 WHERE vip = %s", (new_pri_db_id, vip))
-            log_info(task_id, f"{pre_msg}: add primary vip({vip}) to new primary({new_pri_db_dict['host']}) completed.")
-        except Exception:
-            log_error(
-                task_id, f"{pre_msg}: add vip ({vip}) with unexpected error "
-                f"to new primary({new_pri_db_dict['host']}): {traceback.format_exc()}")
+        err_code, err_msg, rooms = pg_helpers.get_db_room(new_pri_db_id)
+        if err_code != 0:
+            log_error(task_id, f"{pre_msg}: can not get room: {err_msg}")
+        else:
+            vip = rooms.get('vip', vip) if err_code == 0 else vip
+            log_info(task_id, f"{pre_msg}: add primary vip({vip}) to new primary({new_pri_db_dict['host']}) ...")
+            try:
+                rpc_utils.check_and_add_vip(new_pri_db_dict['host'], vip)
+                # update clup_used_vip
+                dbapi.execute("UPDATE clup_used_vip SET db_id=%s,used_reason=1 WHERE vip = %s", (new_pri_db_id, vip))
+                log_info(task_id, f"{pre_msg}: add primary vip({vip}) to new primary({new_pri_db_dict['host']}) completed.")
+            except Exception:
+                log_error(
+                    task_id, f"{pre_msg}: add vip ({vip}) with unexpected error "
+                    f"to new primary({new_pri_db_dict['host']}): {traceback.format_exc()}")
 
         old_pri_db_dict['is_primary'] = 0
         new_pri_db_dict['is_primary'] = 1
@@ -1290,7 +1295,7 @@ def polar_switch(task_id, cluster_id, new_pri_db_id, old_pri_db_id):
             polar_type_list = ['master', 'reader']
             if polar_type in polar_type_list:
                 err_code, err_msg = polar_lib.start_pfs(db_dict['host'], db_dict['db_id'])
-                if err_code != 0 and err_code != 1:
+                if err_code not in {0, 1}:
                     return -1, err_msg
             err_code, err_msg = pg_db_lib.start(db_dict['host'], db_dict['pgdata'])
             if err_code != 0:
@@ -1467,10 +1472,9 @@ def online_sr_cluster(cluster_dict):
             if err_code != 0:
                 logging.info(f"{pre_msg}: Execution of OS-level check on host (IP: {ip}) failed: {ret}")
                 err_result.append([f"Cannot perform OS-level check on host (IP: {ip})", str(ret)])
-            else:
-                if len(ret) > 0:
-                    logging.info(f"{pre_msg}: When performing OS-level checks on the host (IP: {ip}), the following issues were discovered: {str(ret)}")
-                    err_result.extend([([f"{pre_msg}: {i[0]}", i[1]]) for i in ret])
+            elif len(ret) > 0:
+                logging.info(f"{pre_msg}: When performing OS-level checks on the host (IP: {ip}), the following issues were discovered: {str(ret)}")
+                err_result.extend([([f"{pre_msg}: {i[0]}", i[1]]) for i in ret])
 
             pgdata = db['pgdata']
             ret = rpc.os_path_exists(pgdata)
@@ -1525,7 +1529,7 @@ def online_sr_cluster(cluster_dict):
     logging.info(f"{pre_msg}: Starting to check if the replication stream between standby and primary database is normal. ...")
     for db in up_db_list:
         sql = 'select usename, application_name, client_addr::text as client_addr, state from pg_stat_replication'
-        err_code, data = pg_utils.sql_query_dict(db['host'], db_port, 'template1', db_user, db_pass, sql)
+        err_code, err_msg, data = pg_utils.sql_query_dict(db['host'], db_port, 'template1', db_user, db_pass, sql)
 
         if err_code != 0:
             logging.info(f"{pre_msg}: run {sql} on host({db['host']}) failed: {data}")
@@ -1582,10 +1586,10 @@ def online_sr_cluster(cluster_dict):
     probe_db_name = cluster_dict['probe_db_name']
     logging.info(f"{pre_msg}: Please check if the database({probe_db_name}) is created on the database instance on the host machine({pri_ip}) ...")
     sql = 'SELECT count(*) as cnt FROM pg_database WHERE datname=%s'
-    err_code, rows = pg_utils.sql_query_dict(pri_ip, db_port, 'template1', db_user, db_pass, sql,
+    err_code, err_msg, rows = pg_utils.sql_query_dict(pri_ip, db_port, 'template1', db_user, db_pass, sql,
                                              (probe_db_name,))
     if err_code != 0:
-        err_msg = f"Cannot connect to the database using the username({db_user}) and password in the cluster configuration: {rows}"
+        err_msg = f"Cannot connect to the database using the username({db_user}) and password in the cluster configuration: {err_msg}"
         logging.info(f"{pre_msg}: Cluster online failed: {err_msg}")
         err_result.append([f"Unable to connect to the database on the host({pri_ip}) using the username({db_user}) and password specified in the cluster configuration:{rows}",
                            "Please check if the username and password for managing the cluster's database are correct"])
@@ -1608,13 +1612,13 @@ def online_sr_cluster(cluster_dict):
     probe_table = 'cs_sys_heartbeat'
     logging.info(f"{pre_msg}: Check if a table({probe_table}) exists in database({probe_db_name}) in the database instance on the host({pri_ip}) ...")
     sql = "SELECT count(*) as cnt FROM pg_class WHERE relname=%s and relkind='r'"
-    err_code, rows = pg_utils.sql_query_dict(pri_ip, db_port, probe_db_name, db_user, db_pass, sql,
+    err_code, err_msg, rows = pg_utils.sql_query_dict(pri_ip, db_port, probe_db_name, db_user, db_pass, sql,
                                              (probe_table,))
     if err_code != 0:
         logging.info(
-            f"{pre_msg}: An error occurred when checking if a table({probe_table}) is created in database({probe_db_name}) on the database instance on the host({pri_ip}): {rows}")
+            f"{pre_msg}: An error occurred when checking if a table({probe_table}) is created in database({probe_db_name}) on the database instance on the host({pri_ip}): {err_msg}")
         err_result.append([
-            f"An error occurred when checking if a table({probe_table}) is created in database({probe_db_name}) on the database instance on the host({pri_ip}): {rows}",
+            f"An error occurred when checking if a table({probe_table}) is created in database({probe_db_name}) on the database instance on the host({pri_ip}): {err_msg}",
             "Please check the error logs to determine the cause."])
         logging.info(f"{pre_msg}: Online failed!")
         return err_result
@@ -1640,7 +1644,7 @@ def online_sr_cluster(cluster_dict):
     if trigger_db_name and trigger_db_func:
         logging.info(f"{pre_msg}: Start checking if the database trigger action configuration is correct....")
         sql = f"select {trigger_db_func}(0, 'online', %s, %s, %s);"
-        err_code, data = pg_utils.sql_query_dict(
+        err_code, err_msg, data = pg_utils.sql_query_dict(
             pri_db['host'],
             db_port,
             trigger_db_name,
@@ -1650,9 +1654,9 @@ def online_sr_cluster(cluster_dict):
             (pri_db['host'], json.dumps(cluster_dict), json.dumps(cluster_dict))
         )
         if err_code != 0:
-            logging.info(f"{pre_msg}: run {sql} failed: {data}")
+            logging.info(f"{pre_msg}: run {sql} failed: {err_msg}")
             err_result.append([
-                f"Execution of database trigger action failed.: run {sql} failed: {data}",
+                f"Execution of database trigger action failed.: run {sql} failed: {err_msg}",
                 f"Please check if the functions({trigger_db_func}) in the database({trigger_db_name}) exist and can be executed correctly."])
             logging.info(f"{pre_msg}: Check failed, Online failed!")
             return err_result
@@ -1670,16 +1674,12 @@ def online(cluster_id):
     try:
         cluster_dict = dao.get_cluster(cluster_id)
         err_result = []
-        if cluster_dict['state'] not in [0, -1]:
+        if cluster_dict['state'] not in {0, -1}:
             logging.info(f"The cluster({cluster_id}) is not in an offline or failed state, so it cannot be put online!")
             err_result.append(["The cluster is not in an offline or failed state, so it cannot be put online!", "Invalid operation."])
             return -1, err_result
         cluster_type = cluster_dict['cluster_type']
-        if cluster_type == 1:
-            err_result = online_sr_cluster(cluster_dict)
-            if len(err_result) > 0:
-                return -1, err_result
-        elif cluster_type == 11:
+        if cluster_type in {1, 11}:
             err_result = online_sr_cluster(cluster_dict)
             if len(err_result) > 0:
                 return -1, err_result

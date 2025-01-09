@@ -26,7 +26,6 @@ import base64
 
 from Crypto.Cipher import AES
 
-
 _key = '76ca1e79f5ee5ca7'.encode('utf-8')
 
 

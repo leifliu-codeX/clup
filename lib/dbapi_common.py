@@ -24,10 +24,9 @@
 
 import logging
 
+import config
 import psycopg2
 import psycopg2.extras
-
-import config
 
 
 def connect_db():

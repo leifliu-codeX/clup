@@ -262,7 +262,7 @@ def is_ready(rpc, pgdata, port):
         cmd = f'''su - {upw_dict["pw_name"]} -c  "pg_isready -p {port} -t 2" '''
         err_code, err_msg, _out_msg = rpc.run_cmd_result(cmd)
         # 0: is_ready, 1: refuse(in starting), 2: not response(maybe not start), 3: run error(maybe params error)
-        if err_code == 0:
+        if err_code == 0:  # noqa: SIM116
             return 0, True
         elif err_code == 1:
             return 1, "during startup, please wait..."
@@ -732,7 +732,7 @@ def pg_rewind(rpc, pdict):
         if err_code != 0:
             return err_code, err_msg
 
-        if data[0]['cnt'] == 1:
+        if data[0]['cnt'] == 1:  # type: ignore
             err_code = 0
             err_msg = ''
             return err_code, err_msg
@@ -1029,7 +1029,7 @@ def modify_recovery(rpc, pgdata, repl_app_name, repl_user, repl_pass, repl_ip, p
     else:
         content = f"standby_mode = 'on'\nrecovery_target_timeline = 'latest'\nprimary_conninfo={primary_conninfo}"
         try:
-            with open(recovery_file, "w") as fp:
+            with open(recovery_file, "w", encoding='utf-8') as fp:
                 fp.write(content)
         except Exception as e:
             return -1, str(e), ''
@@ -1108,16 +1108,15 @@ def set_pg_data_dir_mode(rpc, os_user, pgdata):
                 err_code, err_msg = rpc.os_chmod(par_path, st['st_mode'] | stat.S_IXGRP | stat.S_IRGRP)
                 if err_code != 0:
                     return err_code, err_msg
-        else:  # 如果目录的属主与组与是用户没有关系,则此目录加上其他用户有读和执行的权限
+        elif not ((st['st_mode'] & stat.S_IXOTH) and (st['st_mode'] & stat.S_IROTH)):  # 如果目录的属主与组与是用户没有关系,则此目录加上其他用户有读和执行的权限
             # 需要有执行和读的权限：
-            if not ((st['st_mode'] & stat.S_IXOTH) and (st['st_mode'] & stat.S_IROTH)):
-                # 直接修改目录的属主为此用户
-                # err_code, err_msg = rpc.os_chown(par_path, upw_dict['pw_uid'], upw_dict['pw_gid'])
-                # if err_code != 0:
-                #    return err_code, err_msg
-                err_code, err_msg = rpc.os_chmod(par_path, st['st_mode'] | stat.S_IXOTH | stat.S_IROTH)
-                if err_code != 0:
-                    return err_code, err_msg
+            # 直接修改目录的属主为此用户
+            # err_code, err_msg = rpc.os_chown(par_path, upw_dict['pw_uid'], upw_dict['pw_gid'])
+            # if err_code != 0:
+            #    return err_code, err_msg
+            err_code, err_msg = rpc.os_chmod(par_path, st['st_mode'] | stat.S_IXOTH | stat.S_IROTH)
+            if err_code != 0:
+                return err_code, err_msg
         par_path = os.path.abspath(os.path.join(par_path, os.pardir))
     return err_code, err_msg
 
@@ -1128,11 +1127,7 @@ def check_pg_version(pg_version):
     cells = pg_version.split('.')
     if len(cells) <= 1:  # 版本号至少有两个数字组成
         return False
-    for k in cells:
-        # 以.分割的各个部分,必须是一个数字
-        if not k.isdigit():
-            return False
-    return True
+    return all(k.isdigit() for k in cells)
 
 
 @rpc_or_host
@@ -1288,7 +1283,7 @@ def pause_standby_walreciver(rpc, db_dict):
         pid = None
         if rows:
             # 如果备库没有接收wal日志则pid为None
-            if rows[0]['pid']:
+            if rows[0]['pid']:  # type: ignore
                 pid = int(rows[0]['pid'])
 
         # 如果存在进程,就kill掉

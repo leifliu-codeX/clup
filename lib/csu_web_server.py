@@ -49,13 +49,11 @@ def http_do_head(req):
     ctype = csu_http.guess_type(req.path)
     real_path = os.path.join(req.web_root, req.path[1:])
     try:
-        f = open(real_path, 'rb')
+        with open(real_path, 'rb') as f:
+            fs = os.fstat(f.fileno())
     except OSError:
         csu_http.reply_http(req.conn, 404, "File not found")
         return
-
-    fs = os.fstat(f.fileno())
-    f.close()
     hdr = {"Content-Type": ctype, "Last-Modified": csu_http.date_time_string(fs.st_mtime)}
     csu_http.reply_http(req.conn, 200, '', hdr)
 
@@ -78,13 +76,12 @@ def http_do_get(req):
                 hdr['Content-Encoding'] = 'gzip'
                 real_path = gz_real_path
     try:
-        f = open(real_path, 'rb')
+        with open(real_path, 'rb') as f:
+            body_data = f.read()
+            fs = os.fstat(f.fileno())
     except OSError:
         csu_http.reply_http(req.conn, 404, "File not found")
         return
-    body_data = f.read()
-    fs = os.fstat(f.fileno())
-    f.close()
     hdr["Last-Modified"] = csu_http.date_time_string(fs.st_mtime)
     csu_http.reply_http(req.conn, 200, body_data, hdr)
 
@@ -106,10 +103,7 @@ def http_do_post(req):
             csu_http.reply_http(req.conn, 400, "Http请求头中没有 content-length")
             return
 
-        if 'content-type' in hdr:
-            content_type = hdr['content-type']
-        else:
-            content_type = ''
+        content_type = hdr.get('content-type', '')
         length = int(hdr['content-length'])
         req_params = {}
         if length > 0:
@@ -117,7 +111,7 @@ def http_do_post(req):
                 partial_body = req.partial_body
                 body_left_size = length - len(partial_body)
                 if body_left_size > 0:
-                    err_code, left_data = csu_http.recv_len_data(req.conn, body_left_size)
+                    err_code, _err_msg, left_data = csu_http.recv_len_data(req.conn, body_left_size)
                     if err_code != 0:
                         return
                     data = partial_body + left_data
@@ -140,7 +134,7 @@ def http_do_post(req):
         if func_name not in http_handler:
             csu_http.reply_http(req.conn, 404, "无此API: %s" % func_name)
             return
-        if func_name not in ['get_session', 'login', 'logout']:
+        if func_name not in {'get_session', 'login', 'logout'}:
             try:
                 c = SimpleCookie()
                 c.load(hdr['cookie'])
@@ -223,9 +217,9 @@ class ProcessThread(threading.Thread):
         logger.debug(f"Recv http {pre_msg} request.")
         csu_http.set_keepalive_linux(self.socket)
         while not self.g_exit_func():
-            err_code, http_dict = csu_http.recv_headers(self.socket)
+            err_code, err_msg, http_dict = csu_http.recv_headers(self.socket)
             if err_code != 0:
-                logger.debug(f"Invalid http request(close connection): {http_dict}.")
+                logger.debug(f"Invalid http request(close connection): {err_msg}.")
                 self.socket.close()
                 break
 

@@ -23,13 +23,13 @@
 """
 
 
+import email.utils
 import mimetypes
 import posixpath
 import socket
 import struct
 import time
-
-import email.utils
+from typing import Tuple
 
 if not mimetypes.inited:
     mimetypes.init()  # try to read system mime.types
@@ -146,23 +146,23 @@ def set_keepalive_linux(sock, after_idle_sec=1, interval_sec=2, max_fails=3):
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, max_fails)
 
 
-def recv_len_data(conn, data_len):
+def recv_len_data(conn, data_len) -> Tuple[int, str, bytes]:
     ret_data = b''
     received_len = 0
     while received_len < data_len:
         recv_data = conn.recv(data_len - received_len)
         if len(recv_data) == 0:
-            return -1, "connection is closed"
+            return -1, "connection is closed", b''
         ret_data += recv_data
         received_len += len(recv_data)
-    return 0, ret_data
+    return 0, '', ret_data
 
 
 MANDATORY = 1
 INT = 2
 
 
-def parse_parms(params, req):
+def parse_parms(params, req) -> Tuple[int, str, dict]:
     """
     :param params:
     :param req:
@@ -184,24 +184,21 @@ def parse_parms(params, req):
     for param in params:
         if param in mandatory_params and param not in req.form:
             # return_param_lost(req, param)
-            return -1, "parameter lost: %s" % param
+            return -1, "parameter lost: %s" % param, {}
         if param not in req.form:
             continue
-        if param in req.form:
-            value = req.form[param]
-        else:
-            value = ''
+        value = req.form.get(param, '')
         if param in int_params:
             if isinstance(value, str):
                 if not value.isdigit():
-                    return -1, "parameter must be integer: %s = %s" % (param, value)
+                    return -1, "parameter must be integer: %s = %s" % (param, value), {}
                 value = int(value)
             elif isinstance(value, int):
                 pass
             else:
-                return -1, "parameter must be integer: %s = %s" % (param, value)
+                return -1, "parameter must be integer: %s = %s" % (param, value), {}
         pdict[param] = value
-    return 0, pdict
+    return 0, '', pdict
 
 
 def reply_http(conn, http_code, body_data, hdr=None):
@@ -221,7 +218,7 @@ def reply_http(conn, http_code, body_data, hdr=None):
     conn.sendall(http_msg)
 
 
-def recv_headers(conn):
+def recv_headers(conn) -> Tuple[int, str, dict]:
     """
     接受http header的数据
     :param conn:
@@ -231,27 +228,27 @@ def recv_headers(conn):
     recv_data = conn.recv(max_hdr_len)
     recv_len = len(recv_data)
     if recv_len == 0:
-        return -1, "socket maybe closed"
+        return -1, "socket maybe closed", {}
     req_data = recv_data
     while b'\r\n\r\n' not in req_data:
         if recv_len >= max_hdr_len:
-            return -1, "header data can not more than %d." % max_hdr_len
+            return -1, f"header data can not more than {max_hdr_len}.", {}
         recv_data = conn.recv(max_hdr_len - recv_len)
         if not recv_data:
-            return -1, "socket maybe closed"
+            return -1, "socket maybe closed", {}
         req_data += recv_data
         recv_len += len(recv_data)
 
     pos = req_data.find(b'\r\n\r\n')
     if pos == -1:
-        return -1, "invalid http request: %s" % str(req_data)
+        return -1, f"invalid http request: {str(req_data)}", {}
     hdr_data = req_data[:pos]
     partial_body = req_data[pos + 4:]
 
     hdr_items = hdr_data.split(b'\r\n')
     cells = hdr_items[0].split()
     if len(cells) != 3:
-        return -1, "invalid http request"
+        return -1, "invalid http request", {}
     http_method = cells[0].decode()
     url_path = cells[1].decode()
     hdr_items = hdr_items[1:]
@@ -265,7 +262,7 @@ def recv_headers(conn):
         else:
             hdr_dict[item.strip()] = ''
     http_dict = {"method": http_method, "path": url_path, "hdr": hdr_dict, "partial_body": partial_body}
-    return 0, http_dict
+    return 0, '', http_dict
 
 
 def ws_recv_frame_hdr(conn):
@@ -276,9 +273,9 @@ def ws_recv_frame_hdr(conn):
     如果err_code为-1表示错误，而data中存的是错误信息。如果err_code为0，则表示为成功，其中remain是当数据包比较大的时候，还没有读完的数据。
     """
 
-    err_code, hdr_data = recv_len_data(conn, 2)
+    err_code, err_msg, hdr_data = recv_len_data(conn, 2)
     if err_code != 0:
-        return err_code, hdr_data
+        return err_code, err_msg
     op_code = hdr_data[0] & 15
     mask_flag = hdr_data[1] & 128
     if mask_flag:
@@ -287,24 +284,24 @@ def ws_recv_frame_hdr(conn):
         mask_key_len = 0
     payload_len = hdr_data[1] & 127
     if payload_len == 126:
-        err_code, next_bytes = recv_len_data(conn, 2 + mask_key_len)
+        err_code, err_msg, next_bytes = recv_len_data(conn, 2 + mask_key_len)
         if err_code != 0:
-            return err_code, next_bytes
+            return err_code, err_msg
         data_len = next_bytes[0] * 256 + next_bytes[1]
         mask_key = next_bytes[2:]
     elif payload_len == 127:
-        err_code, next_bytes = recv_len_data(conn, 8 + mask_key_len)
+        err_code, err_msg, next_bytes = recv_len_data(conn, 8 + mask_key_len)
         if err_code != 0:
-            return err_code, next_bytes
+            return err_code, err_msg
         data_len, = struct.unpack('>Q', next_bytes[:8])
         mask_key = next_bytes[8:]
     else:
         data_len = payload_len
         next_bytes = b''
         if mask_flag:
-            err_code, next_bytes = recv_len_data(conn, mask_key_len)
+            err_code, err_msg, next_bytes = recv_len_data(conn, mask_key_len)
             if err_code != 0:
-                return err_code, next_bytes
+                return err_code, err_msg
             mask_key = next_bytes
         else:
             mask_key = b''

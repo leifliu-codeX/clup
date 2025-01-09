@@ -39,16 +39,14 @@ HA_TASK = 3
 
 
 def get_task_type_list_by_class(class_type: int) -> list:
-    if class_type == 1:
-        return [task_type_def.PG_BUILD_STANDBY_TASK, task_type_def.PG_CREATE_INSTANCE_TASK]
-    elif class_type == 2:
-        return [task_type_def.PG_FULL_BACKUP_TASK, task_type_def.PG_RECOVERY_TASK, task_type_def.PG_COMMON_BACKUP_TASK]
-    elif class_type == 3:
-        return [task_type_def.FAILOVER, task_type_def.CREATE_SR_CLUSTER, task_type_def.FAILBACK, task_type_def.SWITCH]
-    elif class_type == 4:
-        return [task_type_def.CLUP_CHECK]
-    else:
-        return []
+    type_dict = {
+        1: [task_type_def.PG_BUILD_STANDBY_TASK, task_type_def.PG_CREATE_INSTANCE_TASK],
+        2: [task_type_def.PG_FULL_BACKUP_TASK, task_type_def.PG_RECOVERY_TASK, task_type_def.PG_COMMON_BACKUP_TASK],
+        3: [task_type_def.FAILOVER, task_type_def.CREATE_SR_CLUSTER, task_type_def.FAILBACK, task_type_def.SWITCH],
+        4: [task_type_def.CLUP_CHECK]
+    }
+    ret_val = type_dict.get(class_type, [])
+    return ret_val
 
 
 def register_task_callback(task_type, complete_callback):
@@ -139,9 +137,12 @@ def get_task_list(conds: dict, page, limit, task_class):
     return total_count, rows
 
 
-def complete_task(task_id, state, msg, callback_args=dict()):
+def complete_task(task_id, state, msg, callback_args=None):
     global __callback_dict
     global __lock
+
+    if callback_args is None:
+        callback_args = {}
 
     complete_callback = None
     err_code = 0

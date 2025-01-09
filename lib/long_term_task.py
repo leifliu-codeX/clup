@@ -171,11 +171,9 @@ def create_pg_db(task_id, host, db_id, rpc_dict):
                 if 'wal_level' in setting_dict:
                     if setting_dict['wal_level'] == 'minimal':
                         setting_dict['wal_level'] = 'replica'
-                else:
-                    # 10版本及以上，wal_level默认已经时replica，不需要设置
-                    if pg_main_ver <= 9:
-                        setting_dict['wal_level'] = 'replica'
-        
+                elif pg_main_ver <= 9:
+                    setting_dict['wal_level'] = 'replica'
+
         # PostgreSQL17 去掉了参数old_snapshot_threshold
         if pg_main_ver >= 17:
             if 'old_snapshot_threshold' in setting_dict:
@@ -352,10 +350,7 @@ def build_pg_standby(task_id, host, db_id, rpc_dict):
         step = 'create pg os user'
         general_task_mgr.log_info(task_id, f"{msg_prefix}: step start: {step} ...")
 
-        if 'os_uid' not in rpc_dict:
-            os_uid = 701
-        else:
-            os_uid = rpc_dict['os_uid']
+        os_uid = rpc_dict.get('os_uid', 701)
 
         os_user = rpc_dict['os_user']
         step = 'create pg os user'
@@ -442,7 +437,7 @@ def build_pg_standby(task_id, host, db_id, rpc_dict):
 
         step = 'pg_basebackup'
         general_task_mgr.log_info(task_id, f"{msg_prefix}: step start: {step} ...")
-        other_param = ' -P -Xs ' if not other_param else other_param
+        other_param = other_param if other_param else ' -P -Xs '
 
         cmd = f"""su  - {os_user} -c "pg_basebackup -h{up_db_repl_ip} -p{up_db_port} -U {repl_user} -D {pgdata} {tblspc_str} {other_param}" """
 
@@ -532,7 +527,7 @@ def build_pg_standby(task_id, host, db_id, rpc_dict):
             return 0, err_msg
         # 使用pg_isready检查下数据库是不是可以正常连接了
         err_code, err_msg = pg_db_lib.is_ready(rpc, rpc_dict['pgdata'], rpc_dict['port'])
-        if err_code != 0 and err_code != 1:
+        if err_code not in {0, 1}:
             general_task_mgr.log_error(task_id, f"Create database success, but database is not ready, {err_msg}.")
             dao.update_db_state(db_id, database_state.STOP)
         else:
@@ -587,7 +582,7 @@ def pg_setting_list_to_dict(setting_list):
         else:
             setting_type = 1
 
-        if setting_type == 3 or setting_type == 4:
+        if setting_type in {3, 4}:
             # 带有单位的配置值
             if 'unit' not in conf:
                 if setting_type == 4:
@@ -917,7 +912,7 @@ def create_polar_master(task_id, node_info, pfs_info, setting_dict):
 
         step = 'Start pfs progress'
         err_code, err_msg = polarCommon.start_pfsdaemon()
-        if err_code != 0 and err_code != 1:
+        if err_code not in {0, 1}:
             return -1, "Failed to start pfs daemon"
         general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
@@ -1110,13 +1105,13 @@ def build_polar_reader(task_id, node_info, up_db_info, pfs_info):
         step = 'Create a replication slot in the master database'
         general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} ...")
         err_code, err_msg = polar_lib.create_replication_slot(node_info["db_id"])
-        if err_code != 0 and err_code != 1:
+        if err_code not in {0, 1}:
             return -1, err_msg
         general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
         step = 'Start pfs progress'
         err_code, err_msg = polarCommon.start_pfsdaemon()
-        if err_code != 0 and err_code != 1:
+        if err_code not in {0, 1}:
             return -1, "Failed to start pfs daemon"
         general_task_mgr.log_info(task_id, f"{msg_prefix}: {step} successful.")
 
@@ -1144,10 +1139,9 @@ def build_polar_reader(task_id, node_info, up_db_info, pfs_info):
 def build_polar_standby(task_id, node_info, up_db_info):
     msg_prefix = f"Build standby(db_id={node_info['db_id']} on {node_info['host']})"
     # get the polardb major version
-    code, result = polar_lib.get_polar_major_version(node_info["db_id"])
+    code, msg, polar_version = polar_lib.get_polar_major_version(node_info["db_id"])
     if code != 0:
-        return -1, result
-    polar_version = result
+        return -1, msg
 
     try:
         step = 'Check the parameters for creating a standby database'

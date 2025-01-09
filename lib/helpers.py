@@ -22,13 +22,12 @@
 @description: 通用工具
 """
 
-import textwrap
+import logging
 from copy import deepcopy
 from datetime import datetime
 
 import config
 import ip_lib
-import logging
 
 main_logger_name = config.get("logger_name", "main")
 logger = logging.getLogger(f"{main_logger_name}.{__name__}")
@@ -51,68 +50,6 @@ def get_cells_widths(columns, rows, max_width):
     return widths
 
 
-# noinspection PyTypeChecker
-def format_row(columns, row, widths):
-    """
-    :param columns: 为 list 元素 为字段名
-        value为 该列表的类型(左对齐、居中、右对齐)
-    :param row: 为列表的内容 字典形式 key 为字段名 value 为内容
-    :param widths: 为字典形式 key 为字段名 value 为 该字段的最大长度
-    :return:
-    """
-    _max_width = 40
-    format_dict = {
-        '-': str.ljust,
-        '_': str.center,
-        '': str.rjust
-    }
-
-    # 若 value 过长 则 换行
-    for key, value in row.items():
-        if key not in columns:
-            continue
-        lines = value.split('\n')
-        new_lines = []
-        for line in lines:
-            line = textwrap.fill(line, widths[key])
-            new_lines.append(line)
-        value = '\n'.join(new_lines)
-        row[key] = value
-
-    # 获得该行的最高行高
-    row_height = 0
-    for key in columns:
-        height = len(row.get(key, '').split('\n'))
-        row_height = height if height > row_height else row_height
-
-    bits = [['|'] for i in range(row_height)]  # 该行的内容
-
-    for key in columns:
-        value = row.get(key, "")
-        lines = value.split('\n')
-        # 如果 行高不足最大行高 则用 空字符 补齐缺少的行
-        if len(lines) < row_height:
-            lines += ([''.center(widths[key] - 2)] * (row_height - len(lines)))
-        # 每一列根据 \n 将一行  一一对应的添加到对应的bits中去
-        for index, line in enumerate(lines):
-            # 如果 为表格 字段 本身则选择 居中方式
-            if key == value:
-                format_method = str.center
-            else:
-                # 根据 表格的 字段 选择对应的对齐方式
-                format_method = format_dict.get(columns[key], str.center)
-            bits[index].append(
-                " " + format_method(line, widths[key] - 2) + " ")
-
-            # 添加 分隔符
-            bits[index].append('|')
-
-    for index, lines in enumerate(bits):
-        bits[index] = ''.join(lines)
-
-    return '\n'.join(bits)
-
-
 def format_data(data):
     """
     将 从sql 中查询的数据 转化为 unicode
@@ -124,32 +61,6 @@ def format_data(data):
         for key in line:
             line[key] = str(line[key])
     return new_data
-
-
-def print_table(data, prt_type_fields, max_width=40, title=None):
-    lines = []
-    formatted_data = format_data(data)
-    widths = get_cells_widths(prt_type_fields, formatted_data, max_width)
-    table_len = sum(widths.values()) + len(prt_type_fields)  # 表格的最大长度
-
-    if title is not None:
-        lines.append(title.center(table_len))
-
-    # 格式化 表头
-    formatted_fields = format_row(
-        prt_type_fields,
-        dict(zip(prt_type_fields, prt_type_fields)),
-        widths
-    )
-    lines.append(formatted_fields)
-
-    for cluster_info in formatted_data:
-        formatted_row = format_row(prt_type_fields, cluster_info, widths)
-        lines.append(formatted_row)
-    hbar = table_len * '-'
-    mid_bar = f'\n{hbar}\n'
-    print(mid_bar.join(lines))
-    print("-" * table_len)
 
 
 def format_rows(rows):
@@ -272,7 +183,7 @@ def reformat_log_data(data, data_format='table', separator=':'):
             if sep_idx_list is None:
                 sep_idx = -1
                 sep_idx_list = [0]
-                for i in range(line.count(separator)):
+                for _i in range(line.count(separator)):
                     sep_idx = line.index(separator, sep_idx + 1)
                     sep_idx_list.append(sep_idx)
                 # print(list(zip(sep_idx_list, sep_idx_list[1:] + [None])))

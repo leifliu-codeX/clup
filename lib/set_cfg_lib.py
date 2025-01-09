@@ -76,9 +76,8 @@ def modify_config_type1(config_file, modify_item_dict, deli_type=1, is_backup=Tr
     :return:
     """
 
-    fp = open(config_file)
-    ori_lines = fp.readlines()
-    fp.close()
+    with open(config_file, 'r', encoding='utf-8') as fp:
+        ori_lines = fp.readlines()
 
     # 下面的操作先找各个配置项的位置
     # item_line_num_dict1和item_line_num_dict2分别记录相应的配置项在文件中的行号。
@@ -161,14 +160,13 @@ def modify_config_type1(config_file, modify_item_dict, deli_type=1, is_backup=Tr
         shutil.copy(config_file, config_file_bak)
 
     new_lines.append("")
-    fp = open(config_file, 'w')
-    content = '\n'.join(new_lines)
-    fp.write(content)
-    fp.close()
+    with open(config_file, 'w', encoding='utf-8') as fp:
+        content = '\n'.join(new_lines)
+        fp.write(content)
 
 
 def modify_config_type2(config_file, modify_item_dict, is_backup=True, append_if_not=False):
-    """
+    r"""
     通过正则表达式匹配进行更新配置文件,如果匹配了,则替换,如果没有匹配上,会跳过。
     如果key在整个文件中都没有match中,同时append_if_not设置为真,则会在末尾添加。
     例子:
@@ -181,9 +179,8 @@ def modify_config_type2(config_file, modify_item_dict, is_backup=True, append_if
     :return:
     """
 
-    fp = open(config_file)
-    ori_lines = fp.readlines()
-    fp.close()
+    with open(config_file, encoding='utf-8') as fp:
+        ori_lines = fp.readlines()
 
     matched_keys = {}
     new_lines = []
@@ -211,10 +208,9 @@ def modify_config_type2(config_file, modify_item_dict, is_backup=True, append_if
                 new_lines.append(modify_item_dict[k])
 
     new_lines.append("")
-    fp = open(config_file, 'w')
-    content = '\n'.join(new_lines)
-    fp.write(content)
-    fp.close()
+    with open(config_file, 'w', encoding='utf-8') as fp:
+        content = '\n'.join(new_lines)
+        fp.write(content)
 
 
 def append_config_file(file_name, start_tag_line, append_contents):
@@ -233,9 +229,8 @@ def append_config_file(file_name, start_tag_line, append_contents):
     :return:
     """
 
-    fp = open(file_name)
-    content = fp.read()
-    fp.close()
+    with open(file_name, "r", encoding='utf-8') as fp:
+        content = fp.read()
     lines = content.split('\n')
     flag = 0
     new_lines = []
@@ -251,6 +246,5 @@ def append_config_file(file_name, start_tag_line, append_contents):
     new_contents = '\n'.join(new_lines)
     new_contents = f"{new_contents}\n{append_contents}"
 
-    fp = open(file_name, "w")
-    fp.write(new_contents)
-    fp.close()
+    with open(file_name, "w", encoding='utf-8') as fp:
+        fp.write(new_contents)

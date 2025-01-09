@@ -1,0 +1,43 @@
+{
+    "include": [
+      "lib"
+    ],
+    "exclude": [
+      "**/node_modules",
+      "**/__pycache__",
+    ],
+    "ignore": [
+      "lib/oldstuff"
+    ],
+    "defineConstant": {
+      "DEBUG": true
+    },
+    "reportMissingImports": "error",
+    "reportMissingTypeStubs": false,
+    "reportOptionalMemberAccess": false,
+    "reportAttributeAccessIssue": false,
+    "reportOperatorIssue": false,
+    "reportCallIssue": false,
+    "reportUnboundVariable": false,
+    //"reportAssignmentType": "information",
+    "pythonVersion": "3.9",
+    "pythonPlatform": "Linux",
+    "executionEnvironments": [
+      {
+        "root": "test/web",
+        "pythonVersion": "3.5",
+        "pythonPlatform": "Windows",
+        "extraPaths": [
+          "src/service_libs"
+        ],
+        "reportMissingImports": "warning",
+      },
+      {
+        "root": "test/sdk",
+        "pythonVersion": "3.0",
+        "extraPaths": [
+          "src/backend"
+        ]
+      },
+    ]
+  }

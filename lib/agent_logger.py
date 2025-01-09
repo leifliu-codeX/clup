@@ -23,6 +23,9 @@
 """
 
 import logging
+from typing import cast
+
+import csurpc
 import rpc_utils
 
 
@@ -66,7 +69,7 @@ def query_agent_log_level(ip, log_type_list, conn_timeout=1):
     err_code, err_msg = rpc_utils.get_rpc_connect(ip, conn_timeout)
     if err_code != 0:
         return ret_log_level_dict
-    rpc = err_msg
+    rpc = cast(csurpc.Client, err_msg)
     try:
         for log_type in log_type_list:
             err_code, err_msg = rpc.get_log_level(log_type)

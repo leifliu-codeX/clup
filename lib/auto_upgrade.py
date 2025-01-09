@@ -27,7 +27,6 @@ from ipaddress import IPv4Address, IPv4Network
 
 import config
 import dbapi
-import ip_lib
 import run_lib
 
 

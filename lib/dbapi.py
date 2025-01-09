@@ -101,7 +101,7 @@ class DBProcess:
             self.conn = None
 
 
-def query(sql, args=()):
+def query(sql, args=()) -> list[psycopg2.extras.RealDictRow]:
     """
     使用连接池的方式执行一条SQL语句
     :param sql: 字符串类型, 有绑定变量的SQL语句

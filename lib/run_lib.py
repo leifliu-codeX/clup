@@ -22,16 +22,17 @@
 @description: OS命令运行模块
 """
 
-import os
-import sys
-import select
+import contextlib
 import logging
+import os
+import select
 import subprocess
+import sys
 
 
 def run_cmd(cmd):
     logging.debug(f"Run: {cmd}")
-    cp = subprocess.run(cmd, shell=True)
+    cp = subprocess.run(cmd, shell=True, check=False)
     return cp.returncode
 
 
@@ -44,22 +45,20 @@ def daemon_execv(path, args):
 
     sys.stdout.flush()
     sys.stderr.flush()
-    si = open('/dev/null', 'r')
-    so = open('/dev/null', 'a+')
-    se = open('/dev/null', 'a+', 0)
-    os.dup2(si.fileno(), sys.stdin.fileno())
-    os.dup2(so.fileno(), sys.stdout.fileno())
-    os.dup2(se.fileno(), sys.stderr.fileno())
+    with open('/dev/null', 'r', encoding='utf-8') as si, \
+            open('/dev/null', 'a+', encoding='utf-8') as so, \
+            open('/dev/null', 'a+', encoding='utf-8') as se:
+        os.dup2(si.fileno(), sys.stdin.fileno())
+        os.dup2(so.fileno(), sys.stdout.fileno())
+        os.dup2(se.fileno(), sys.stderr.fileno())
 
     # 把打开的文件句柄关闭，防止影响子进程
     fds = os.listdir(f'/proc/{pid}/fd')
     for fd in fds:
         int_fd = int(fd)
         if int_fd > 2:
-            try:
+            with contextlib.suppress(Exception):
                 os.close(int_fd)
-            except Exception:
-                pass
     os.execv(path, args)
 
 

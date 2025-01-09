@@ -27,13 +27,14 @@ import logging
 import threading
 import time
 import traceback
+
 import cluster_state
 import config
 import csuapp
 import dao
-import dbapi
 import database_state
 import db_encrypt
+import dbapi
 import ha_logic
 import ha_mgr
 import helpers
@@ -52,7 +53,7 @@ def sr_check_del_write_vip(cluster_id):
     primary_host = dao.get_primary_host(cluster_id)
     host_list = dao.get_cluster_db_host_list(cluster_id)
     vip_detail = dao.get_cluster_vip(cluster_id)
-    room = pg_helpers.get_current_cluster_room(cluster_id)
+    _err_code, _err_msg, room = pg_helpers.get_current_cluster_room(cluster_id)
     vip = vip_detail['vip']
     for db in host_list:
         host = db['host']
@@ -206,7 +207,7 @@ class SrHaChecker(threading.Thread):
 
     def run(self):
         while not csuapp.is_exit():
-            probe_interval = int(config.get('sr_ha_check_interval', 10))
+            probe_interval = config.getint('sr_ha_check_interval', 10)
             try:
                 # 先把集群设置为checking状态，防止在检查过程中对集群有其他并发操作
                 ret = dao.test_and_set_cluster_state(self.cluster_id, [cluster_state.NORMAL], cluster_state.CHECKING)
@@ -259,15 +260,9 @@ class SrHaChecker(threading.Thread):
                         db_user = clu_db_list[0]['db_user']
                         db_pass = db_encrypt.from_db_text(clu_db_list[0]['db_pass'])
 
-                        if 'probe_retry_cnt' not in cluster_dict:
-                            probe_retry_cnt = 2
-                        else:
-                            probe_retry_cnt = cluster_dict['probe_retry_cnt']
+                        probe_retry_cnt = cluster_dict.get('probe_retry_cnt', 2)
 
-                        if 'probe_retry_interval' not in cluster_dict:
-                            probe_retry_interval = 4
-                        else:
-                            probe_retry_interval = cluster_dict['probe_retry_interval']
+                        probe_retry_interval = cluster_dict.get('probe_retry_interval', 4)
 
                         if is_primary:
                             probe_sql = probe_pri_sql
@@ -421,10 +416,7 @@ class ClusterChangeChecker(threading.Thread):
                     if cluster_id in pre_cluster_list:
                         continue
                     cluster_type = dao.get_cluster_type(cluster_id)
-                    if cluster_type == 1:
-                        db_checker = SrHaChecker(cluster_id)
-                        db_checker.start()
-                    elif cluster_type == 11:
+                    if cluster_type in {1, 11}:
                         db_checker = SrHaChecker(cluster_id)
                         db_checker.start()
                     logging.info(f"ha cluster({cluster_id}) thread started")
