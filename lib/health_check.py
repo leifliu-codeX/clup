@@ -181,7 +181,7 @@ def probe_postgres_db(cluster_id, host, db_port, db_name, db_user, db_pass, sql,
     cluster = dao.get_cluster_name(cluster_id)
     cluster = cluster.get('cluster_name', cluster_id)
     while i < retry_cnt:
-        err_code, err_msg = probe_db.probe_postgres(
+        err_code, err_msg, _ret_data = probe_db.probe_postgres(
             host, db_port, db_name, db_user, db_pass, sql, timeout)
         if err_code != 0:
             current_time_str = helpers.get_current_time_str()

@@ -25,11 +25,11 @@
 import logging
 import logging.handlers
 
-g_stdout_handle = None
-g_file_handle = None
+g_stdout_handle = logging.Handler()
+g_file_handle = logging.Handler()
 
 
-class MultiformatFormatter:
+class MultiformatFormatter(logging.Formatter):
     """实现debug级别下打印文件名和行号,其它级别不打印
 
     Args:
@@ -88,12 +88,12 @@ def init(level, log_file: str, max_bytes=10 * 1024 * 1024, backup_count=5):
     formatter = MultiformatFormatter()
 
     g_stdout_handle = logging.StreamHandler()
-    g_stdout_handle.setFormatter(formatter)  # type: ignore
+    g_stdout_handle.setFormatter(formatter)
     logger.addHandler(g_stdout_handle)
 
     # file_handle = logging.handlers.RotatingFileHandler(log_file, encoding='UTF-8', maxBytes=10 * 1024 * 1024, backupCount=5)
     g_file_handle = MyLogHandler(log_file, encoding='UTF-8', maxBytes=max_bytes, backupCount=backup_count)
-    g_file_handle.setFormatter(formatter)  # type: ignore
+    g_file_handle.setFormatter(formatter)
     logger.addHandler(g_file_handle)
 
     logger.setLevel(level)
@@ -121,10 +121,10 @@ def reinit(level, log_file: str, max_bytes=10 * 1024 * 1024, backup_count=5):
 
     # formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
     formatter = MultiformatFormatter()
-    logger.removeHandler(g_file_handle)  # type: ignore
+    logger.removeHandler(g_file_handle)
 
     g_file_handle = MyLogHandler(log_file, encoding='UTF-8', maxBytes=max_bytes, backupCount=backup_count)
-    g_file_handle.setFormatter(formatter)  # type: ignore
+    g_file_handle.setFormatter(formatter)
     logger.addHandler(g_file_handle)
 
     logger.setLevel(level)

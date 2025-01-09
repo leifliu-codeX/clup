@@ -22,6 +22,7 @@
 @description: PostgerSQL数据库工具模块
 """
 
+import traceback
 from typing import Tuple
 
 import psycopg2
@@ -91,14 +92,14 @@ def get_repl_delay(pri_db_host, pri_db_port, db_user, db_pass, cur_wal):
     return msg
 
 
-def get_last_lsn(host, port, user, password):
+def get_last_lsn(host, port, user, password) -> Tuple[int, str, str, int]:
     """
     获得数据库的最后LSN(log sequence number)
     :param host:
     :param port:
     :param user:
     :param password:
-    :return: 返回三个值，第一值是错误码，如果错误码为0，第二值是LSN，如果错误码不为0，第二个值是错误信息，第三个值是timeline
+    :return: 返回4个值，第1值是错误码，第2个值为错误信息，第3值是LSN，第4个值是timeline
     """
     try:
         conn = psycopg2.connect(f"dbname='template1'  host='{host}' user='{user}' password='{password}'"
@@ -110,9 +111,9 @@ def get_last_lsn(host, port, user, password):
         db_data = cur.fetchall()
         cur.close()
         conn.close()
-        return 0, db_data[0][2], db_data[0][1]
-    except Exception as e:
-        return -1, str(e), -1
+        return 0, '', db_data[0][2], db_data[0][1]
+    except Exception:
+        return -1, traceback.format_exc(), '', -1
 
 
 def lsn_to_xlog_file_name(timeline, lsn, wal_segment_size):

@@ -29,7 +29,7 @@ import os
 import re
 import time
 import traceback
-from typing import Any, Tuple, Union
+from typing import Any, Dict, Tuple, Union, cast
 
 import dao
 import database_state
@@ -156,7 +156,8 @@ def create_db(pdict):
 
         setting_dict = pg_setting_list_to_dict(pdict['setting_list'])
         setting_dict['port'] = pdict['port']
-        if "pg_stat_statements" not in setting_dict.get("shared_preload_libraries"):  # type: ignore
+        shared_preload_libraries = cast(str, setting_dict.get("shared_preload_libraries"))
+        if "pg_stat_statements" not in shared_preload_libraries:
             return -1, 'Database needs pg_stat_statements plug-in, please fill in in shared_preload_libraries'
 
         host = pdict['host']
@@ -492,11 +493,11 @@ def sr_test_can_switch(old_pri_db, new_pri_db):
 
     try:
         repl_pass = db_encrypt.from_db_text(new_pri_db['repl_pass'])
-        err_code, new_pri_last_wal_file = probe_db.get_last_wal_file(
+        err_code, err_msg, new_pri_last_wal_file = probe_db.get_last_wal_file(
             new_pri_db['repl_ip'], new_pri_db['port'], new_pri_db['repl_user'], repl_pass)
 
         if err_code != 0:
-            err_msg = f"get new pirmary({new_pri_db['host']}) last wal file failed: {new_pri_last_wal_file}"
+            err_msg = f"get new pirmary({new_pri_db['host']}) last wal file failed: {err_msg}"
             return err_code, err_msg
 
         # err_code, str_ver = rpc_utils.pg_version(old_pri_db['host'], old_pri_db['pgdata'])
@@ -744,7 +745,7 @@ def get_db_params(up_db_id, standby_id):
     return 0, pdict
 
 
-def pg_setting_list_to_dict(setting_list) -> dict:
+def pg_setting_list_to_dict(setting_list) -> Dict[Any, Any]:
     setting_dict = dict()
     for conf in setting_list:
         sql = "SELECT setting_type FROM clup_init_db_conf WHERE setting_name=%s"
@@ -1489,9 +1490,9 @@ def get_max_lsn_db(db_list):
         if not db:
             logging.error(f"Failed to obtain database(db_id={db_id}) information.")
             continue
-        err_code, lsn, _ = probe_db.get_last_lsn(db[0]['host'], db[0]['port'], db[0]['repl_user'], db_encrypt.from_db_text(db[0]['repl_pass']))
+        err_code, err_msg, lsn, _ = probe_db.get_last_lsn(db[0]['host'], db[0]['port'], db[0]['repl_user'], db_encrypt.from_db_text(db[0]['repl_pass']))
         if err_code != 0:
-            logging.error(f"Failed to obtain database(db_id={db_id}) lsn information. error: {lsn}")
+            logging.error(f"Failed to obtain database(db_id={db_id}) lsn information. error: {err_msg}")
             continue
         if lsn > curr_lsn and not new_pri_pg:
             curr_lsn = lsn

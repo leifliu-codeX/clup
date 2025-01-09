@@ -722,7 +722,7 @@ def pg_rewind(rpc, pdict):
 
         step = "Check whether the stream replication of the standby database is normal"
         sql = "SELECT count(*) AS cnt  FROM pg_stat_replication WHERE application_name=%s AND state='streaming'"
-        err_code, data = probe_db.run_sql(up_db_host,
+        err_code, err_msg, data = probe_db.run_sql(up_db_host,
                                           up_db_port,
                                           'template1',
                                           db_user,
@@ -732,7 +732,7 @@ def pg_rewind(rpc, pdict):
         if err_code != 0:
             return err_code, err_msg
 
-        if data[0]['cnt'] == 1:  # type: ignore
+        if data[0]['cnt'] == 1:
             err_code = 0
             err_msg = ''
             return err_code, err_msg
@@ -1228,7 +1228,7 @@ def pause_standby_walreciver(rpc, db_dict):
         conf_data = err_msg
 
         is_exists = rpc.os_path_exists(pg_auto_conf_file)
-        auto_conf_data = None
+        auto_conf_data = {}
         if is_exists:
             err_code, err_msg = rpc.read_config_file_items(pg_auto_conf_file, conf_list)
             if err_code != 0:
@@ -1275,7 +1275,7 @@ def pause_standby_walreciver(rpc, db_dict):
 
         # 获取walreceiver的进程号
         query_pid = 'select pid from pg_stat_get_wal_receiver()'
-        err_code, rows = probe_db.run_sql(host, port, 'template1', db_user, db_pass, query_pid, ())
+        err_code, err_msg, rows = probe_db.run_sql(host, port, 'template1', db_user, db_pass, query_pid, ())
         if err_code != 0:
             return_msg = f"run sql({query_pid}) to get walreceiver pid faild"
             return -1, return_msg
@@ -1283,7 +1283,7 @@ def pause_standby_walreciver(rpc, db_dict):
         pid = None
         if rows:
             # 如果备库没有接收wal日志则pid为None
-            if rows[0]['pid']:  # type: ignore
+            if rows[0]['pid']:
                 pid = int(rows[0]['pid'])
 
         # 如果存在进程,就kill掉
@@ -1295,17 +1295,17 @@ def pause_standby_walreciver(rpc, db_dict):
 
         time.sleep(1)
         # 检查进程是否已经kill掉
-        err_code, rows = probe_db.run_sql(host, port, 'template1', db_user, db_pass, query_pid, ())
+        err_code, err_msg, rows = probe_db.run_sql(host, port, 'template1', db_user, db_pass, query_pid, ())
         if err_code != 0:
-            return_msg = f"run sql({query_pid}) to check walreceiver pid faild"
+            return_msg = f"run sql({query_pid}) to check walreceiver pid failed: {err_msg}"
             return -1, return_msg
 
         # 如果PID还存在,等待3s再查一次
         if rows[0]['pid']:
             time.sleep(3)
-            err_code, rows = probe_db.run_sql(host, port, 'template1', db_user, db_pass, query_pid, ())
+            err_code, err_msg, rows = probe_db.run_sql(host, port, 'template1', db_user, db_pass, query_pid, ())
             if rows[0]['pid']:
-                return_msg = f"kill walreceiver process pid({pid}) faild"
+                return_msg = f"kill walreceiver process pid({pid}) failed: {err_msg}"
                 return -1, return_msg
 
         return 0, 'pause standby walreciver success'

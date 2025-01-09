@@ -25,6 +25,7 @@
 import os
 import re
 from ipaddress import IPv4Address
+from typing import Any, Dict
 
 import dbapi
 import run_lib
@@ -52,7 +53,7 @@ def get_nic_ip_dict():
     content = run_lib.open_cmd(cmd)
     lines = content.split("\n")
     nic_dict = {}
-    nic = {}
+    nic: Dict[Any, Any] = {}
     ipv4 = {}
     ipv6 = {}
     for line in lines:
@@ -68,7 +69,7 @@ def get_nic_ip_dict():
             r"\s+link/[^ \t]* ([0-9a-fA-F]{2}(:[0-9a-fA-F]{2})*) brd .*", line
         )
         if match:
-            nic["mac"] = match.group(1)  # type: ignore
+            nic["mac"] = match.group(1)
             continue
 
         match = re.search(
@@ -77,7 +78,7 @@ def get_nic_ip_dict():
         if match:
             if "ipv4" not in nic:
                 ipv4 = dict()
-                nic["ipv4"] = ipv4  # type: ignore
+                nic["ipv4"] = ipv4
             ipv4[match.group(1)] = int(match.group(2))
             continue
 
@@ -86,7 +87,7 @@ def get_nic_ip_dict():
         if match:
             if "ipv6" not in nic:
                 ipv6 = dict()
-                nic["ipv6"] = ipv6  # type: ignore
+                nic["ipv6"] = ipv6
             ipv6[match.group(1)] = int(match.group(2))
             continue
     return nic_dict

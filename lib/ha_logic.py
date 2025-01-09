@@ -342,9 +342,9 @@ def failover_primary_db(task_id, cluster_id, db_id):
     # 先根据scores排序，scores值越大，优先级越低
     all_good_stb_db.sort(key=lambda x: x['scores'], reverse=False)
     for p in all_good_stb_db:
-        err_code, str_lsn, _ = probe_db.get_last_lsn(p['host'], db_port, repl_user, repl_pass)
+        err_code, err_msg, str_lsn, _ = probe_db.get_last_lsn(p['host'], db_port, repl_user, repl_pass)
         if err_code != 0:
-            task_log_info(task_id, f"{pre_msg}: db({ p['host']}:{db_port}) probe failed! {str_lsn}")
+            task_log_info(task_id, f"{pre_msg}: db({ p['host']}:{db_port}) probe failed! {err_msg}")
             continue
 
         lsn = pg_db_lib.lsn_to_int(str_lsn)

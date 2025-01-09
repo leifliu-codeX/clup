@@ -33,6 +33,7 @@ import threading
 import time
 import traceback
 import uuid
+from typing import Any, Tuple, cast
 
 import config
 import logger
@@ -40,8 +41,8 @@ import pg_utils
 import psycopg2
 import psycopg2.extras
 
-g_q_request = None   # 进程间发送请求的队列
-g_q_reply = None     # 进程间接收已完成的命令的队列
+g_q_request = multiprocessing.Queue(1000)  # 进程间发送请求的队列
+g_q_reply = multiprocessing.Queue(1000)  # 进程间接收已完成的命令的队列
 
 g_cmd_dict = {}
 g_cmd_dict_lock = threading.Lock()
@@ -56,7 +57,7 @@ CMD_TYPE_GET_LAST_LSN = 2004
 CMD_TYPE_GET_LAST_WAL_FILE = 2005
 
 
-def get_cmd_result(cmd_id):
+def get_cmd_result(cmd_id) -> Tuple[bool, int, str, Any]:
     """[summary]
 
     Args:
@@ -65,20 +66,21 @@ def get_cmd_result(cmd_id):
     Returns:
         run_is_over: 是否运行结束
         err_code:
-        err_msg
+        err_msg:
+        ret_data:
     """
     global g_cmd_dict
     global g_cmd_dict_lock
     g_cmd_dict_lock.acquire()
     try:
         if cmd_id not in g_cmd_dict:
-            return False, -1, f"not this cmd({cmd_id})"
+            return False, -1, f"not this cmd({cmd_id})", None
         cmd_dict = g_cmd_dict[cmd_id]
         if cmd_dict['run_is_over']:
             del g_cmd_dict[cmd_id]
-            return True, cmd_dict['err_code'], cmd_dict['err_msg']
+            return True, cmd_dict['err_code'], cmd_dict['err_msg'], cmd_dict.get('ret_data')
         else:
-            return False, 0, ''
+            return False, 0, '', None
     finally:
         g_cmd_dict_lock.release()
 
@@ -105,49 +107,59 @@ def update_cmd_data(new_cmd_dict):
         g_cmd_dict_lock.release()
 
 
-def __probe_pg_db(sql, host, port, db, user, password):
-    conn = psycopg2.connect(database=db, user=user, password=password, host=host, port=port)
-    conn.autocommit = True
-    cur = conn.cursor()
-    cur.execute(sql)
-    cur.close()
-    conn.close()
-    return 0, '0'
+def __probe_pg_db(sql, host, port, db, user, password) -> Tuple[int, str, Any]:
+    try:
+        conn = psycopg2.connect(database=db, user=user, password=password, host=host, port=port)
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute(sql)
+        cur.close()
+        conn.close()
+        return 0, '0', None
+    except Exception:
+        return -1, traceback.format_exc(), None
+    return 0, '0', None
 
 
-def __pg_exec_sql(host, port, db, user, password, sql, params):
-    conn = psycopg2.connect(database=db, user=user, password=password, host=host, port=port)
-    conn.autocommit = True
-    cur = conn.cursor()
-    cur.execute(sql, params)
-    cur.close()
-    conn.close()
-    return 0, '0'
+def __pg_exec_sql(host, port, db, user, password, sql, params) -> Tuple[int, str, Any]:
+    try:
+        conn = psycopg2.connect(database=db, user=user, password=password, host=host, port=port)
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute(sql, params)
+        cur.close()
+        conn.close()
+        return 0, '0', None
+    except Exception:
+        return -1, traceback.format_exc(), None
 
 
-def __pg_run_sql(host, port, db, user, password, sql, params):
-    conn = psycopg2.connect(database=db, user=user, password=password, host=host, port=port)
-    conn.autocommit = True
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute(sql, params)
-    db_data = cur.fetchall()
-    cur.close()
-    conn.close()
-    return 0, db_data
+def __pg_run_sql(host, port, db, user, password, sql, params) -> Tuple[int, str, Any]:
+    try:
+        conn = psycopg2.connect(database=db, user=user, password=password, host=host, port=port)
+        conn.autocommit = True
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(sql, params)
+        db_data = cur.fetchall()
+        cur.close()
+        conn.close()
+        return 0, '', db_data
+    except Exception:
+        return -1, traceback.format_exc(), []
 
 
-def __get_last_lsn(host, port, user, password):
-    err_code, data, time_line = pg_utils.get_last_lsn(host, port, user, password)
+def __get_last_lsn(host, port, user, password) -> Tuple[int, str, Any]:
+    err_code, err_msg, lsn, time_line = pg_utils.get_last_lsn(host, port, user, password)
     if err_code == 0:
-        return 0, json.dumps({"data": data, "time_line": time_line})
+        return 0, '', json.dumps({"lsn": lsn, "time_line": time_line})
     else:
-        return err_code, data
+        return err_code, err_msg, ''
 
 
-def __get_last_wal_file(host, port, user, password):
-    err_code, lsn, time_line = pg_utils.get_last_lsn(host, port, user, password)
+def __get_last_wal_file(host, port, user, password) -> Tuple[int, str, Any]:
+    err_code, err_msg, lsn, time_line = pg_utils.get_last_lsn(host, port, user, password)
     if err_code != 0:
-        return err_code, lsn
+        return err_code, err_msg, ''
     try:
         sql = "select setting,unit from pg_settings where name='wal_segment_size'"
         conn = psycopg2.connect(database='template1', user=user, password=password, host=host, port=port)
@@ -161,9 +173,9 @@ def __get_last_wal_file(host, port, user, password):
         unit = db_data[0]['unit']
         wal_segment_size = pg_utils.get_val_with_unit(val, unit)
         wal_file = pg_utils.lsn_to_xlog_file_name(time_line, lsn, wal_segment_size)
-        return 0, wal_file
+        return 0, '', wal_file
     except Exception:
-        return -1, traceback.format_exc()
+        return -1, traceback.format_exc(), ''
 
 
 def probe_child_process(request_queue, target_func, cmd_dict):
@@ -173,11 +185,12 @@ def probe_child_process(request_queue, target_func, cmd_dict):
 
     try:
         target_args = cmd_dict['args']
-        err_code, err_msg = target_func(*target_args)
+        err_code, err_msg, ret_data = target_func(*target_args)
         cmd_dict['req_action'] = REQ_RECV_CMD_RESULT
         cmd_dict['run_is_over'] = True
         cmd_dict['err_code'] = err_code
         cmd_dict['err_msg'] = err_msg
+        cmd_dict['ret_data'] = ret_data
         request_queue.put(cmd_dict)
     except Exception as e:
         err_msg = traceback.format_exc()
@@ -186,6 +199,7 @@ def probe_child_process(request_queue, target_func, cmd_dict):
         cmd_dict['err_code'] = -1
         cmd_dict['err_msg'] = str(e)
         cmd_dict['req_action'] = REQ_RECV_CMD_RESULT
+        cmd_dict['ret_data'] = None
         request_queue.put(cmd_dict)
 
 
@@ -206,6 +220,7 @@ def clean_expired_cmd(reply_queue):
             cmd_dict['req_action'] = REQ_RECV_CMD_RESULT
             cmd_dict['err_code'] = -1
             cmd_dict['err_msg'] = 'timeout'
+            cmd_dict['ret_data'] = None
             _cmd_type = cmd_dict['type']
             _target_args = cmd_dict['args']
 
@@ -277,6 +292,7 @@ def probe_service(request_queue, reply_queue):
                     cmd_dict['run_is_over'] = True
                     cmd_dict['err_code'] = -1
                     cmd_dict['err_msg'] = f'unknown cmd type: {cmd_type}'
+                    cmd_dict['ret_data'] = None
                     cmd_dict['run_end_time'] = time.time()
                     logging.info(f"probe cmd({cmd_id}) start failed, reply: {desensitized_args}")
                     reply_queue.put(cmd_dict)
@@ -375,7 +391,7 @@ def run_with_timeout(cmd_type, target_args, time_out=10):
     desensitized_args = get_desensitized_args(cmd_dict)
     # 保存到g_cmd_dict全局变量中
     save_cmd_dict(cmd_dict)
-    g_q_request.put(cmd_dict)  # type: ignore
+    g_q_request.put(cmd_dict)
     logging.debug(f"run probe cmd({cmd_dict['id']}) {desensitized_args} ...")
 
     begin_time = time.time()
@@ -387,20 +403,20 @@ def run_with_timeout(cmd_type, target_args, time_out=10):
             last_warn_time = curr_time
 
         try:
-            reply = g_q_reply.get_nowait()  # type: ignore
+            reply = g_q_reply.get_nowait()
             # 收到的reply，可能是别的线程中发的命令，没有关系，更新到g_cmd_dict中
             logging.debug(f"probe cmd({cmd_id}) get a reply({reply['id']})")
             update_cmd_data(reply)
             logging.debug(f"probe cmd({cmd_id}), save reply({reply['id']}) to g_cmd_dict.")
         except queue.Empty:
             pass
-        run_is_over, err_code, err_msg = get_cmd_result(cmd_id)  # 如果命令已经运行结束，则会从全局变量g_cmd_dict移除
+        run_is_over, err_code, err_msg, ret_data = get_cmd_result(cmd_id)  # 如果命令已经运行结束，则会从全局变量g_cmd_dict移除
         # logging.debug(f"probe cmd({cmd_id}), get_cmd_result return: {run_is_over}.")
         if not run_is_over:
             time.sleep(0.1)
             continue
-        logging.debug(f"probe cmd({cmd_id}) result: err_code={err_code}, err_msg={err_msg} ")
-        return err_code, err_msg
+        logging.debug(f"probe cmd({cmd_id}) result: err_code={err_code}, err_msg={err_msg}, ret_data={ret_data}")
+        return err_code, err_msg, ret_data
 
 
 def probe_postgres(host, port, db, user, password, sql, time_out=10):
@@ -408,11 +424,11 @@ def probe_postgres(host, port, db, user, password, sql, time_out=10):
     """
     cmd_type = CMD_TYPE_PROBE_PG
     target_args = (sql, host, port, db, user, password)
-    err_code, err_msg = run_with_timeout(cmd_type, target_args, time_out)
-    return err_code, err_msg
+    err_code, err_msg, ret_data = run_with_timeout(cmd_type, target_args, time_out)
+    return err_code, err_msg, ret_data
 
 
-def get_last_lsn(host, port, user, password, time_out=10):
+def get_last_lsn(host, port, user, password, time_out=10) -> Tuple[int, str, str, int]:
     """
     获得一个数据库的最后的LSN(log sequence number)
     :param host:
@@ -425,14 +441,16 @@ def get_last_lsn(host, port, user, password, time_out=10):
 
     cmd_type = CMD_TYPE_GET_LAST_LSN
     target_args = (host, port, user, password)
-    err_code, err_msg = run_with_timeout(cmd_type, target_args, time_out)
+    err_code, err_msg, ret_data = run_with_timeout(cmd_type, target_args, time_out)
     if err_code == 0:
-        out_data = json.loads(err_msg)
-        return 0, out_data['data'], out_data['time_line']
-    return err_code, err_msg, ''
+        out_data = json.loads(ret_data)
+        lsn = cast(str, out_data['lsn'])
+        timeline = cast(int, out_data['time_line'])
+        return 0, '', lsn, timeline
+    return err_code, err_msg, '', -1
 
 
-def get_last_wal_file(host, port, user, password, time_out=10):
+def get_last_wal_file(host, port, user, password, time_out=10) -> tuple[int, str, str]:
     """
     获得一个数据库的最后的LSN(log sequence number)
     :param host:
@@ -445,11 +463,11 @@ def get_last_wal_file(host, port, user, password, time_out=10):
 
     cmd_type = CMD_TYPE_GET_LAST_WAL_FILE
     target_args = (host, port, user, password)
-    err_code, err_msg = run_with_timeout(cmd_type, target_args, time_out)
-    return err_code, err_msg
+    err_code, err_msg, ret_data = run_with_timeout(cmd_type, target_args, time_out)
+    return err_code, err_msg, ret_data
 
 
-def run_sql(host, port, db, user, password, sql, params, time_out=10):
+def run_sql(host, port, db, user, password, sql, params, time_out=10) -> tuple[int, str, list]:
     """
     :param host:
     :param port:
@@ -463,11 +481,11 @@ def run_sql(host, port, db, user, password, sql, params, time_out=10):
     """
     cmd_type = CMD_TYPE_RUN_SQL
     target_args = (host, port, db, user, password, sql, params)
-    err_code, err_msg = run_with_timeout(cmd_type, target_args, time_out)
-    return err_code, err_msg
+    err_code, err_msg, ret_data = run_with_timeout(cmd_type, target_args, time_out)
+    return err_code, err_msg, ret_data
 
 
-def exec_sql(host, port, db, user, password, sql, params, time_out=10):
+def exec_sql(host, port, db, user, password, sql, params, time_out=10) -> tuple[int, str]:
     """
     :param host:
     :param port:
@@ -481,5 +499,5 @@ def exec_sql(host, port, db, user, password, sql, params, time_out=10):
 
     cmd_type = CMD_TYPE_EXEC_SQL
     target_args = (host, port, db, user, password, sql, params)
-    err_code, err_msg = run_with_timeout(cmd_type, target_args, time_out)
+    err_code, err_msg, _ret_data = run_with_timeout(cmd_type, target_args, time_out)
     return err_code, err_msg
