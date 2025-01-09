@@ -29,7 +29,6 @@ import logging
 import re
 import time
 import traceback
-from typing import cast
 
 import cluster_state
 import config
@@ -535,7 +534,6 @@ def get_all_db_list(req):
     err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 400, err_msg
-    pdict = cast(dict, pdict)
     # page_num = pdict['page_num']
     page_num = pdict.setdefault('page_num', 1)
     page_size = pdict.setdefault('page_size', 10000)
@@ -1539,7 +1537,6 @@ def renew_pg_bin_info(req):
     err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 400, err_msg
-    pdict = cast(dict, pdict)
 
     err_code, err_msg, _ = pg_helpers.renew_pg_bin_info(pdict['db_id'])
     if err_code != 0:
@@ -2089,7 +2086,6 @@ def get_db_pg_hba(req):
     err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 400, err_msg
-    pdict = cast(dict, pdict)
 
     try:
         # get the db info
@@ -2305,7 +2301,6 @@ def get_pg_log_file_list(req):
     err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 400, err_msg
-    pdict = cast(dict, pdict)
 
     # get the db_info
     sql = "SELECT host, pgdata FROM clup_db WHERE db_id = %s"

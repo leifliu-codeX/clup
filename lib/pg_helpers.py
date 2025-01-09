@@ -29,7 +29,7 @@ import os
 import re
 import time
 import traceback
-from typing import Tuple, Union
+from typing import Any, Tuple, Union
 
 import dao
 import database_state
@@ -40,7 +40,6 @@ import long_term_task
 import pg_db_lib
 import pg_utils
 import probe_db
-import psycopg2
 import rpc_utils
 import task_type_def
 
@@ -789,7 +788,7 @@ def modify_setting_list(setting_list, pdict):
     return setting_list
 
 
-def get_db_conn(db_id) -> Tuple[int, str, Union[psycopg2.connection, None]]:
+def get_db_conn(db_id) -> Tuple[int, str, Union[Any, None]]:
     """
     通过db_id 获取连接
     """

@@ -25,7 +25,7 @@
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from typing import Tuple, Union
+from typing import Any, Tuple, Union
 
 import database_state
 import db_encrypt
@@ -443,7 +443,7 @@ def get_host_info(object_id):
     return rows
 
 
-def get_db_conn(db_dict) -> Tuple[int, str, Union[psycopg2.connection, None]]:
+def get_db_conn(db_dict) -> Tuple[int, str, Union[Any, None]]:
     try:
         db_name = db_dict.get('db_name', 'template1')
         db_host = db_dict['host']

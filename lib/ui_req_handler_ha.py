@@ -29,7 +29,6 @@ import os
 import time
 import traceback
 from ipaddress import IPv4Address, IPv4Network
-from typing import cast
 
 import cluster_state
 import csu_http
@@ -61,7 +60,6 @@ def get_cluster_list(req):
     err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 400, err_msg
-    pdict = cast(dict, pdict)
 
     page_num = pdict['page_num']
     page_size = pdict['page_size']
@@ -110,7 +108,6 @@ def get_cluster_detail(req):
     err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 400, err_msg
-    pdict = cast(dict, pdict)
 
     cluster_id = pdict['cluster_id']
 
@@ -178,7 +175,6 @@ def get_cluster_db_list(req):
     err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 400, err_msg
-    pdict = cast(dict, pdict)
 
     cluster_id = pdict['cluster_id']
 
@@ -251,7 +247,6 @@ def get_cluster_db_info_api(req):
     err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 400, err_msg
-    pdict = cast(dict, pdict)
 
     cluster_id = pdict['cluster_id']
     try:
@@ -320,7 +315,6 @@ def get_cluster_host_list(req):
     err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 400, err_msg
-    pdict = cast(dict, pdict)
 
     cluster_id = pdict['cluster_id']
 
@@ -413,7 +407,6 @@ def delete_cluster(req):
     err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 400, err_msg
-    pdict = cast(dict, pdict)
 
     cluster_id = pdict['cluster_id']
     try:
@@ -475,7 +468,6 @@ def modify_sr_cluster_info(req):
     err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 400, err_msg
-    pdict = cast(dict, pdict)
 
     cluster_id = pdict['cluster_id']
     attr_dict = copy.copy(pdict)
@@ -560,7 +552,6 @@ def add_sr_cluster_room_info(req):
     err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 400, err_msg
-    pdict = cast(dict, pdict)
 
     # check the vip is in the vip pool
     pool_id = pdict['pool_id']
@@ -608,7 +599,6 @@ def update_sr_cluster_room_info(req):
     err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 400, err_msg
-    pdict = cast(dict, pdict)
 
     # check the vip is in the vip pool
     pool_id = pdict['pool_id']
@@ -674,7 +664,6 @@ def get_sr_cluster_room_info(req):
     err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 400, err_msg
-    pdict = cast(dict, pdict)
 
     cluster_id = pdict['cluster_id']
     sql = "SELECT cluster_data FROM clup_cluster WHERE cluster_id=%s"
@@ -731,7 +720,6 @@ def get_switch_log_api(req):
     err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 400, err_msg
-    pdict = cast(dict, pdict)
 
     try:
         sql = "SELECT create_time, log FROM task_log WHERE task_id=%s"
@@ -756,7 +744,6 @@ def delete_sr_cluster_room_info(req):
     err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 400, err_msg
-    pdict = cast(dict, pdict)
 
     cluster_id = pdict['cluster_id']
     room_id = pdict['room_id']
@@ -799,7 +786,6 @@ def remove_db_from_cluster(req):
     err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 400, err_msg
-    pdict = cast(dict, pdict)
 
     sql = "SELECT host, port, cluster_data->'cluster_name' as cluster_name FROM" \
           " clup_db INNER JOIN clup_cluster USING (cluster_id) WHERE db_id=%s"
@@ -835,7 +821,6 @@ def modify_db_in_cluster(req):
     err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 400, err_msg
-    pdict = cast(dict, pdict)
 
     cluster_id = pdict['cluster_id']
     db_id = pdict['db_id']
@@ -889,7 +874,6 @@ def get_last_lsn(req):
     err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 400, err_msg
-    pdict = cast(dict, pdict)
 
     cluster_id = pdict['cluster_id']
     err_code, lsn_list_data = ha_mgr.get_last_lsn(cluster_id)
@@ -918,7 +902,6 @@ def get_repl_delay(req):
     err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 400, err_msg
-    pdict = cast(dict, pdict)
 
     cluster_id = pdict['cluster_id']
 
@@ -940,7 +923,6 @@ def online_cluster(req):
     err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 400, err_msg
-    pdict = cast(dict, pdict)
 
     cluster_id = pdict['cluster_id']
 
@@ -1550,7 +1532,6 @@ def get_db_relation(req):
     err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 400, err_msg
-    pdict = cast(dict, pdict)
 
     cluster_id = pdict['cluster_id']
     primary_db = dao.get_primary_info(cluster_id)
@@ -1883,7 +1864,6 @@ def modify_polar_cluster_info(req):
     err_code, err_msg, pdict = csu_http.parse_parms(params, req)
     if err_code != 0:
         return 400, err_msg
-    pdict = cast(dict, pdict)
 
     cluster_id = pdict['cluster_id']
     attr_dict = copy.copy(pdict)

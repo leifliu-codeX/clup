@@ -29,6 +29,7 @@ import logging
 # agent_log
 import math
 import os
+import typing
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import agent_logger
@@ -364,7 +365,7 @@ def get_pg_settings(req):
     for row in rows:
         setted_dict[row["pg_version"]] = True
 
-    ret_dict = {
+    ret_dict: typing.Dict[typing.Any, typing.Any] = {
         "setted_info": setted_dict
     }
     # get follow version db infor
