@@ -41,8 +41,8 @@ import pg_utils
 import psycopg2
 import psycopg2.extras
 
-g_q_request = multiprocessing.Queue(1000)  # 进程间发送请求的队列
-g_q_reply = multiprocessing.Queue(1000)  # 进程间接收已完成的命令的队列
+g_q_request = None  # 进程间发送请求的队列
+g_q_reply = None  # 进程间接收已完成的命令的队列
 
 g_cmd_dict = {}
 g_cmd_dict_lock = threading.Lock()
