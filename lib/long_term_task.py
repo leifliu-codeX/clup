@@ -968,8 +968,15 @@ def create_polar_master(task_id, node_info, pfs_info, setting_dict):
             rpc.close()
 
 
-def task_create_polardb(task_id, node_info, pfs_info):
-    code, result = create_polar_master(task_id, node_info, pfs_info)
+def task_create_polardb_with_pfs(task_id, node_info, pfs_info, setting_dict):
+    """创建PolarDB共享存储的单库，非集群
+
+    Args:
+        task_id (_type_): _description_
+        node_info (_type_): _description_
+        pfs_info (_type_): _description_
+    """
+    code, result = create_polar_master(task_id, node_info, pfs_info, setting_dict)
     try:
         ret_msg = ""
         task_state = 0

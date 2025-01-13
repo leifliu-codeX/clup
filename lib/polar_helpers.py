@@ -386,7 +386,8 @@ def create_polardb_with_pfs(node_info, pfs_info):
         db_detail.update(pfs_info)
         del db_detail["db_type"]
         del db_detail["setting_list"]
-        del db_detail["instance_name"]
+        if db_detail.get("instance_name"):
+            del db_detail["instance_name"]
         db_detail["polar_type"] = "master"
 
         # db info
@@ -430,9 +431,12 @@ def create_polardb_with_pfs(node_info, pfs_info):
             task_name=task_name,
             task_data=node_info
         )
-        node_info['db_pass'] = db_encrypt.from_db_text(node_info['db_pass'])
-        node_info["setting_dict"] = long_term_task.pg_setting_list_to_dict(node_info['setting_list'])
-        general_task_mgr.run_task(task_id, long_term_task.task_create_polardb, (node_info, pfs_info))
+        # node_info['db_pass'] = db_encrypt.from_db_text(node_info['db_pass'])
+        # node_info["setting_dict"] = long_term_task.pg_setting_list_to_dict(node_info['setting_list'])
+        # general_task_mgr.run_task(task_id, long_term_task.task_create_polardb, (node_info, pfs_info))
+
+        setting_dict = long_term_task.pg_setting_list_to_dict(node_info['setting_list'])
+        general_task_mgr.run_task(task_id, long_term_task.task_create_polardb_with_pfs, (node_info, pfs_info, setting_dict))
     except Exception:
         err_msg = f"Create task for create polardb with unexpected error, {traceback.format_exc()}."
         if task_id:
