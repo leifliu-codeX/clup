@@ -1462,7 +1462,9 @@ def check_disk_on_host(host, pfs_disk_name):
             if return_code == 0:
                 st_rdev = stdout['st_rdev']
             else:
-                return -1, f"Failed to get st_rdev {path} in agent[{host}]"
+                # return -1, f"Failed to get st_rdev {path} in agent[{host}]"
+                # 忽略错误，这一般是lxc容器的情况，容器中不存在此文件
+                continue
             dev = major(st_rdev), minor(st_rdev)
             mounted_dev.append(dev)
 
