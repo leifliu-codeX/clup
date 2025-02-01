@@ -1422,7 +1422,7 @@ def create_polar_sd_cluster(task_id, cluster_id, master_node_info, reader_node_l
             # update the instance state
             dao.update_db_state(node_info['db_id'], database_state.RUNNING)
 
-            return 0, "Success"
+        return 0, "Success"
     except Exception:
         if node_info.get("db_id"):
             dao.update_db_state(node_info['db_id'], database_state.FAULT)
