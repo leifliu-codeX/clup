@@ -117,10 +117,13 @@ def get_last_lsn(host, port, user, password) -> Tuple[int, str, str, int]:
 
 
 def lsn_to_xlog_file_name(timeline, lsn, wal_segment_size):
-
-    cells = lsn.split('/')
-    xlog_id = int(cells[0], 16)
-    xlog_seg = (int(cells[1], 16) // (wal_segment_size))
+    cells = lsn.split("/")
+    # 单个xlogId能有多少个WAL段文件
+    xlog_per_xlogId = 2**32 // wal_segment_size
+    int_lsn = (int(cells[0], 16) << 32) + int(cells[1], 16)
+    xlogsegno = (int_lsn - 1) // wal_segment_size
+    xlog_id = xlogsegno // xlog_per_xlogId
+    xlog_seg = xlogsegno % xlog_per_xlogId
     return f"{timeline:08X}{xlog_id:08X}{xlog_seg:08X}"
 
 
