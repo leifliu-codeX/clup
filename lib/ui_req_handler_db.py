@@ -767,7 +767,7 @@ def modify_db_conf(req):
             if err_code != 0:
                 err_db_list.append(db_id)
 
-        if len(err_db_list):
+        if err_db_list:
             more_msg += f",Failed to modify parameters synchronously:{err_db_list},please check database is running!"
         else:
             more_msg += ", Synchronizing parameters is complete"
@@ -2566,3 +2566,149 @@ def disable_standby_sync(req):
         return 400, result
 
     return 200, "Success"
+
+
+def check_port_is_right(req):
+    """检查输入的端口是否正确
+
+    Args:
+        req (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+    param = {
+        "host": csu_http.MANDATORY,
+        "pgdata": csu_http.MANDATORY,
+        "port": csu_http.MANDATORY | csu_http.INT,
+    }
+    err_code, err_msg, pdict = csu_http.parse_parms(param, req)
+    if err_code != 0:
+        return 400, err_msg
+    try:
+        err_code, err_msg = rpc_utils.get_rpc_connect(pdict["host"])
+        if err_code != 0:
+            return 200, json.dumps({"err_code": -1, "err_msg": err_msg})
+
+        rpc = err_msg
+        postmaster_file = f"{pdict['pgdata']}/postmaster.pid"
+        if not rpc.os_path_exists(postmaster_file):
+            return 200, json.dumps({"err_code": -1, "err_msg": "Please check whether the database is started."})
+        file_size = rpc.get_file_size(postmaster_file)
+        if file_size < 0:
+            return 200, json.dumps(
+                {"err_code": -1, "err_msg": f"Failed to get the file size:(file_name={postmaster_file})"}
+            )
+
+        err_code, err_msg = rpc.os_read_file(postmaster_file, 0, file_size)
+        if err_code != 0:
+            return 200, json.dumps(
+                {"err_code": -1, "err_msg": f"Failed to obtain the file content:(file_name={postmaster_file})"}
+            )
+        lines = err_msg.decode().split("\n")
+        if lines[3] != str(pdict["port"]):
+            return 200, json.dumps(
+                {
+                    "err_code": -1,
+                    "err_msg": f"The port {pdict['port']} does not match the data directory {pdict['pgdata']}, please check if it is correct."
+                }
+            )
+    except Exception:
+        return 200, json.dumps({"err_code": -1, "err_msg": traceback.format_exc()})
+    return 200, json.dumps({"err_code": 0, "err_msg": ""})
+
+
+def add_db(req):
+    """导入数据库
+
+    Args:
+        req (_type_): _description_
+    """
+    params = {
+        "instance_name": 0,  # 实例名
+        "host": csu_http.MANDATORY,  # 主机
+        "port": csu_http.MANDATORY,  # 端口
+        "pgdata": csu_http.MANDATORY,  # 数据目录
+        "db_user": csu_http.MANDATORY,  # 用户名
+        "db_pass": csu_http.MANDATORY,  # 密码
+        "db_type": 0,  # 数据库类型：1-PG， 11-polardb
+    }
+
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, err_msg
+
+    if "db_type" not in pdict:
+        pdict["db_type"] = 1
+
+    host = pdict["host"]
+    port = pdict["port"]
+    instance_name = pdict.get("instance_name")
+    sql = "SELECT count(*) FROM clup_db wHERE (pgdata = %s AND host=%s) OR (port = %s AND host=%s)"
+    rows = dbapi.query(sql, (pdict["pgdata"], host, port, host))
+    if rows[0]["count"] > 0:
+        return 400, f"Database addition failure, {host}:{port} {pdict['pgdata']} already used"
+    sql = f"SELECT count(*) FROM clup_db WHERE host = '{host}' AND port= {port} "
+    rows = dbapi.query(sql)
+    if rows[0]["count"] > 0:
+        return 400, f"create fail, Port {port} already in used on host:({host})"
+
+    # 先尝试连接下数据库
+    # 此逻辑在端口检查时已实现，无需再次确认
+    err_code, err_msg = rpc_utils.get_rpc_connect(host)
+    if err_code != 0:
+        return 400, err_msg
+
+    rpc = err_msg
+    err_code, err_msg = pg_db_lib.is_ready(rpc, pdict["pgdata"], pdict["port"])
+    # 测试数据库连接是否正常
+    if err_code != 0:
+        return 400, err_msg
+    err_code, is_primary = pg_db_lib.is_primary(host, pdict["pgdata"])
+    if err_code != 0:
+        return 400, f"Failed to check whether the database is primary or standby: {is_primary}"
+
+    err_code, err_msg = pg_db_lib.get_db_port(rpc, str(pdict["pgdata"]))
+    rpc.close()
+    if err_code != 0:
+        logging.error(f"Failed to get running database port: {err_msg}")
+    else:
+        port = err_msg
+        if int(pdict["port"]) != int(port):
+            return 400, f"The input port is{pdict['port']}, running port is{port}, Please check port and try again!"
+
+    # 尝试连接数据库
+    err_code, err_msg, conn = dao.get_db_conn(pdict)
+    if err_code == 0:
+        conn.close()
+    else:
+        return 400, f"Failed to connect to the database: {err_msg}"
+
+    db_detail = {
+        "db_user": pdict["db_user"],
+        "db_pass": pdict["db_pass"],
+        "instance_type": "physical",
+        "room_id": "0",
+    }
+    if is_primary:
+        pdict["is_primary"] = 1
+    else:
+        pdict["is_primary"] = 0
+    pdict["state"] = 1
+    pdict["db_state"] = 0
+    # leifliu 当数据库名为空时，为pidct添加'instance_name'字段
+    pdict["instance_name"] = instance_name
+    pdict["db_detail"] = json.dumps(db_detail)
+
+    sql = (
+        "INSERT INTo clup_db(state, pgdata, is_primary, host, instance_name, db_detail, port, db_state, db_type, scores, repl_ip)"
+        " VALUES(%(state)s,%(pgdata)s,%(is_primary)s,%(host)s,%(instance_name)s,%(db_detail)s, %(port)s, %(db_state)s, %(db_type)s, 0, %(host)s) RETURNING db_id"
+    )
+    rows = dbapi.query(sql, pdict)
+    db_id = rows[0]["db_id"]
+    ret_message = "Add database success"
+    err_code, err_msg, _new_dict = pg_helpers.renew_pg_bin_info(db_id)
+    if err_code != 0:
+        ret_message = f"{ret_message}, renew pg bin info failed, ferr_msgy."
+
+    return 200, ret_message
