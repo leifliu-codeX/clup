@@ -886,7 +886,7 @@ def get_all_setting_category(req):
 
         setting_category_set = set([entry['category'] for entry in all_settings_list])
         # 移除None，防止后面的sorted(list(setting_category_set))报错
-        setting_category_set.remove(None)
+        setting_category_set.discard(None)
         return 200, json.dumps({'category_list': sorted(list(setting_category_set)), 'msg': 'Successfully obtain the category list!'})
     except Exception as e:
         return 400, json.dumps({'category_list': [], 'msg': f'Description Failed to obtain the category list! error message: {e}'})

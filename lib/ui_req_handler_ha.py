@@ -2066,11 +2066,11 @@ def batch_online_cluster(req):
     wait_online_list = list()
     failed_cluster_list = list()
     allow_alter_cluster_states = [cluster_state.OFFLINE, cluster_state.FAILED]
-    while len(cluster_id_list) or len(wait_online_list):
+    while len(cluster_id_list) or wait_online_list:
         cluster_id = None
         if len(cluster_id_list):
             cluster_id = cluster_id_list.pop()
-        elif len(wait_online_list):
+        elif wait_online_list:
             cluster_id = wait_online_list.pop()
             time.sleep(3)
 
@@ -2100,7 +2100,7 @@ def batch_online_cluster(req):
             logging.error(f"Online cluster({cluster_id}) with unexpected error, {err_msg}.")
             break
 
-    if len(failed_cluster_list):
+    if failed_cluster_list:
         return 400, f"There some cluster online failed, {failed_cluster_list}."
     return 200, "Batch online cluster success."
 
@@ -2123,11 +2123,11 @@ def batch_offline_cluster(req):
     cluster_id_list = pdict['cluster_id_list']
     wait_offline_list = list()
     failed_cluster_list = list()
-    while len(cluster_id_list) or len(wait_offline_list):
+    while len(cluster_id_list) or wait_offline_list:
         cluster_id = None
         if len(cluster_id_list):
             cluster_id = cluster_id_list.pop()
-        elif len(wait_offline_list):
+        elif wait_offline_list:
             cluster_id = wait_offline_list.pop()
             time.sleep(3)
 
@@ -2155,7 +2155,7 @@ def batch_offline_cluster(req):
             logging.error(f"Offline cluster({cluster_id}) with unexpected error, {err_msg}.")
             break
 
-    if len(failed_cluster_list):
+    if failed_cluster_list:
         return 400, f"There some cluster offline failed, {failed_cluster_list}."
     return 200, "Batch offline cluster success."
 
@@ -2475,3 +2475,318 @@ def check_vip_in_pool(req):
         return 400, result
 
     return 200, result
+
+
+def add_sr_cluster(req):
+    params = {
+        "cluster_name": csu_http.MANDATORY,
+        "vip": csu_http.MANDATORY,
+        "read_vip": 0,
+        "pool_id": csu_http.INT,  # vip pool id
+        "port": csu_http.MANDATORY | csu_http.INT,
+        "pgdata": csu_http.MANDATORY,
+        "cstlb_list": 0,
+        "db_ip_list": csu_http.MANDATORY,
+        "repl_ip_list": csu_http.MANDATORY,
+        "remark": 0,
+        "trigger_db_name": 0,
+        "trigger_db_func": 0,
+        "db_user": csu_http.MANDATORY,
+        "db_pass": csu_http.MANDATORY,
+        "probe_db_name": csu_http.MANDATORY,
+        "probe_interval": csu_http.MANDATORY | csu_http.INT,
+        "probe_timeout": csu_http.MANDATORY | csu_http.INT,
+        "probe_retry_cnt": csu_http.MANDATORY | csu_http.INT,
+        "probe_retry_interval": csu_http.MANDATORY | csu_http.INT,
+        "repl_user": csu_http.MANDATORY,
+        "repl_pass": csu_http.MANDATORY,
+        "probe_pri_sql": csu_http.MANDATORY,
+        "probe_stb_sql": csu_http.MANDATORY,
+        "auto_failover": csu_http.MANDATORY,
+        "auto_failback": csu_http.MANDATORY,
+        "failover_keep_cascaded": csu_http.MANDATORY,
+        "save_old_room_vip": csu_http.MANDATORY,
+    }
+
+    # 检查参数的合法性，如果成功，把参数放到一个字典中
+    err_code, err_msg, pdict = csu_http.parse_parms(params, req)
+    if err_code != 0:
+        return 400, err_msg
+
+    # check vip is used in other cluster or not
+    check_sql = "SELECT * FROM clup_used_vip WHERE vip=%s"
+    check_rows = dbapi.query(check_sql, (pdict["vip"],))
+    if check_rows:
+        if check_rows[0]["cluster_id"]:
+            return (
+                400,
+                f"The vip({pdict['vip']}) is aready used by cluster(cluster_id={check_rows[0]['cluster_id']}), please check.",
+            )
+        # check the db
+        check_db_sql = (
+            "SELECT db.db_id FROM clup_db db,clup_used_vip v WHERE db.db_id=v.db_id AND db.host in %s AND db.port=%s"
+        )
+        check_db_rows = dbapi.query(check_db_sql, (tuple(pdict["db_ip_list"].split(",")), pdict["port"]))
+        if not check_db_rows:
+            return 400, f"The vip is aready used by others db(db_id={check_rows[0]['db_id']}), please check."
+
+    cluster_data = copy.copy(pdict)
+    # 这几个字段只存到clup_db的db_detail中，在clup_cluster中的cluster_data不再保存
+    del cluster_data["db_user"]
+    del cluster_data["db_pass"]
+    del cluster_data["repl_user"]
+    del cluster_data["repl_pass"]
+
+    # 把一些非强制提供的参数，初始化为空字符串
+    for attr, val in params.items():
+        if attr not in cluster_data:
+            if attr in params and (val & csu_http.INT == csu_http.INT):
+                continue
+            cluster_data[attr] = ""
+
+    # 在流复制类型的cluster_data中不需要存储pgdata、db_ip_list、repl_ip_list
+    del cluster_data["pgdata"]
+    del cluster_data["db_ip_list"]
+    del cluster_data["repl_ip_list"]
+
+    if "cstlb_list" not in pdict:
+        cluster_data["cstlb_list"] = ""
+        cluster_data["read_vip_host"] = ""
+    else:
+        cstlb_list = pdict["cstlb_list"].split(",")
+        # 只读vip放在最后一个数据库主机上面
+        cluster_data["read_vip_host"] = cstlb_list[-1].split(":")[0]
+
+    if "read_vip" not in pdict:
+        cluster_data["read_vip"] = ""
+
+    cluster_type = 1
+
+    # 数据库目录不同用 ; 隔开
+    repl_ip_list = pdict["repl_ip_list"].split(",")
+    db_ip_list = pdict["db_ip_list"].split(",")
+    if len(db_ip_list) != len(repl_ip_list):
+        return (
+            400,
+            "The number of IP addresses in the replication IP list needs to be the same as the number of IP addresses in the database IP list!",
+        )
+    pgdata_list = pdict["pgdata"].split(",")
+    if len(pgdata_list) != 1 and len(pgdata_list) != len(db_ip_list):
+        return 400, "The number of database directories and database IP addresses is inconsistent"
+    checkout_err_list = []
+    checkout_port_list = []
+
+    # 检查填写的端口是否正确
+    for i in range(len(db_ip_list)):
+        ip = db_ip_list[i]
+        pgdata = pgdata_list[i] if len(pgdata_list) > 1 else pdict["pgdata"]
+
+        err_code, err_msg = rpc_utils.get_rpc_connect(ip)
+        if err_code != 0:
+            return 400, f"host({ip}) Connection failed"
+
+        rpc = err_msg
+        # 检查目录是否存在
+        is_exists = rpc.os_path_exists(pgdata)
+        if not is_exists:
+            return 400, f"The host ({ip}) database directory({pgdata}) is not exists,please check and try again..."
+
+        err_code, err_msg = pg_db_lib.get_db_port(rpc, pgdata)
+        if err_code != 0:
+            err_msg = f"Failed to read database configuration: {err_msg}"
+            logging.error(err_msg)
+            checkout_err_list.append(ip + ": " + err_msg)
+            continue
+        port = err_msg
+        if int(port) != int(pdict["port"]):
+            checkout_port_list.append(f"{ip}:{port}")
+        rpc.close()
+
+    if checkout_err_list:
+        return 400, f"Failed to check the host port: ({str(checkout_err_list)})"
+    if checkout_port_list:
+        return 400, f"The port {pdict['port']} not match host; actual port:({str(checkout_port_list)})"
+
+    db_detail = {
+        "db_user": pdict["db_user"],
+        "db_pass": pdict["db_pass"],
+        "repl_user": pdict["repl_user"],
+        "repl_pass": pdict["repl_pass"],
+        "room_id": "0",
+    }
+    cluster_data["rooms"] = {
+        "0": {
+            "room_name": "默认机房",
+            "vip": cluster_data["vip"],
+            "read_vip": cluster_data["read_vip"],
+            "cstlb_list": cluster_data["cstlb_list"],
+        }
+    }
+    ipList = []
+    cluster_db_id_list = []
+    # 把集群信息存入数据库中
+    with dbapi.DBProcess() as dbp:
+        rows = dbp.query(
+            "INSERT INTO clup_cluster(cluster_type, cluster_data, state,lock_time)"
+            " VALUES(%s,%s,%s,%s) RETURNING cluster_id",
+            (cluster_type, json.dumps(cluster_data), 0, 0),
+        )
+        cluster_id = rows[0]["cluster_id"]
+
+        # add db infor
+        i = 0
+        scores = 100
+        primary_num = 0
+        for db_ip in db_ip_list:
+            repl_ip = repl_ip_list[i]
+            # repl_app_name = db_ip
+            pgdata = pgdata_list[0]
+            if len(pgdata_list) > 1:
+                pgdata = pgdata_list[i]
+            # leifliu 修复数据库目录带末尾“/”时，导致检测数据库是否已存在时漏检
+            if "/" == pgdata[-1]:
+                pgdata = pgdata[:-1]
+            # 检查host和端口是否存在
+            sql = "SELECT cluster_id, db_id, port, is_primary FROM clup_db WHERE host=%s AND pgdata=%s"
+            # 修复检测数据库是否已存在时存在漏检问题，原pdict["pgdata"]在多个数据库目录时错误
+            rows = dbp.query(sql, (db_ip, pgdata))
+            if len(rows) > 0:
+                if rows[0]["cluster_id"]:
+                    dbp.rollback()
+                    return (
+                        400,
+                        f"The database ({db_ip}:{pdict['port']}) already in the cluster (cluster_id: {cluster_id})",
+                    )
+                is_primary = rows[0]["is_primary"]
+
+                if rows[0]["port"] != pdict["port"]:
+                    dbp.rollback()
+                    port = rows[0]["port"]
+                    return (
+                        400,
+                        f"The database already exists in the data directory({pgdata}) of the host({db_ip}), the port({port}) is inconsistent with the cluster port({pdict['port']})!",
+                    )
+                sql = """UPDATE clup_db SET state=1, cluster_id=%s,
+                    repl_ip = %s, db_detail = db_detail || %s::jsonb where host= %s AND port = %s
+                """
+                repl_info_str = json.dumps({"repl_user": pdict["repl_user"], "repl_pass": pdict["repl_pass"]})
+                dbp.execute(sql, (cluster_id, repl_ip, repl_info_str, db_ip, pdict["port"]))
+
+                # check clup_used_vip, if exists update or insert
+                if is_primary:
+                    primary_num += 1
+                    search_sql = "SELECT * FROM clup_used_vip WHERE vip=%s"
+                    vip_rows = dbp.query(search_sql, (pdict["vip"],))
+                    if not vip_rows:
+                        insert_sql = "INSERT INTO clup_used_vip(pool_id,vip,db_id,cluster_id,used_reason) VALUES(%s,%s,%s,%s,1) RETURNING vip"
+                        insert_rows = dbp.query(
+                            insert_sql, (pdict["pool_id"], pdict["vip"], rows[0]["db_id"], cluster_id)
+                        )
+                        if not insert_rows:
+                            logging.error(f"Excute sql({insert_sql}) failed.")
+                    else:
+                        dbp.execute(
+                            "UPDATE clup_used_vip SET db_id=%s,cluster_id=%s,used_reason=1 WHERE vip=%s",
+                            (rows[0]["db_id"], cluster_id, pdict["vip"]),
+                        )
+
+                if primary_num > 1:
+                    dbp.rollback()
+                    return 400, "There are two or more primary databases in the cluster, please check before importing."
+
+                i += 1
+                continue
+
+            # 先连接数据库查看主备库
+            db_dict = {
+                "host": db_ip,
+                "port": pdict["port"],
+                "db_user": pdict["db_user"],
+                "db_pass": pdict["db_pass"]
+            }
+            err_code, err_msg, conn = dao.get_db_conn(db_dict)
+            if err_code != 0:
+                dbp.rollback()
+                return 400, f"Connect database(host={db_ip}) failed, {err_msg}"
+            query_is_primary_sql = "SELECT pg_is_in_recovery() AS is_primary"
+            is_primary_rows = dao.sql_query(conn, query_is_primary_sql)
+            if is_primary_rows[0]["is_primary"]:
+                is_primary = 0
+            else:
+                is_primary = 1
+                primary_num += 1
+
+            primary_conninfo = ""
+            cluster_name_value = ""
+            repl_app_name = ""
+            setting_sql = "SELECT name, setting FROM pg_settings WHERE name = 'cluster_name' OR name = 'primary_conninfo'"
+            setting_rows = dao.sql_query(conn, setting_sql)
+            conn.close()
+            for setting in setting_rows:
+                if setting["name"] == "primary_conninfo":
+                    primary_conninfo = setting["setting"]
+                elif setting["name"] == "cluster_name":
+                    cluster_name_value = setting["setting"]
+
+            if cluster_name_value:
+                repl_app_name = cluster_name_value
+            if primary_conninfo:
+                conninfo = primary_conninfo.split()
+                for k in conninfo:
+                    data = k.split("=")
+                    if len(data) == 2 and data[0] == "application_name":
+                        repl_app_name = data[1]
+
+            if not repl_app_name:
+                dbp.rollback()
+                return 400, f"Please configure application_name in the database(host={db_ip}) parameter primary_conninfo."
+
+            db_insert_sql = (
+                "INSERT INTO clup_db(cluster_id, state, pgdata, "
+                "is_primary, repl_app_name, host, repl_ip, port, db_detail, scores, db_state ) "
+                "values(%s,%s,%s,%s,%s,%s,%s,%s,%s, %s,%s) RETURNING db_id "
+            )
+            db_rows = dbp.query(
+                db_insert_sql,
+                (
+                    cluster_id,
+                    1,
+                    pgdata,
+                    is_primary,
+                    repl_app_name,
+                    db_ip,
+                    repl_ip,
+                    pdict["port"],
+                    json.dumps(db_detail),
+                    scores,
+                    1,
+                ),
+            )
+            db_id = db_rows[0]["db_id"]
+            ipList.append(db_ip)
+            if db_rows:
+                cluster_db_id_list.append(db_id)
+
+            if primary_num > 1:
+                dbp.rollback()
+                return 400, "There are two or more primary databases in the cluster, please check before importing."
+
+            # if is primary db,add used vip info
+            if is_primary:
+                insert_sql = "INSERT INTO clup_used_vip(pool_id,vip,db_id,cluster_id,used_reason) VALUES(%s, %s, %s, %s, 1) RETURNING vip"
+                used_vip_rows = dbp.query(insert_sql, (pdict["pool_id"], pdict["vip"], db_id, cluster_id))
+                if not used_vip_rows:
+                    logging.error(f"Excute sql({insert_sql}) failed.")
+
+            i += 1
+    # update standby up_db_id
+    sql = "SELECT db_id FROM clup_db WHERE cluster_id = %s AND is_primary = 1"
+    rows = dbapi.query(sql, (cluster_id,))
+    if rows:
+        sql = "UPDATE clup_db SET up_db_id = %s WHERE cluster_id=%s AND is_primary = 0 AND up_db_id IS NULL"
+        dbapi.execute(sql, (rows[0]["db_id"], cluster_id))
+
+    for db_id in cluster_db_id_list:
+        err_code, err_msg, _new_dict = pg_helpers.renew_pg_bin_info(db_id)
+
+    return 200, str(cluster_id)
