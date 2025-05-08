@@ -447,7 +447,7 @@ def merge_primary_conninfo_str(primary_conninfo, primary_conninfo_dict):
 
 
 @rpc_or_host
-def set_sr_config_file(rpc, pg_major_int_version, repl_user, repl_pass, up_db_repl_ip, up_db_port, repl_app_name, pgdata, recovery_min_apply_delay=None):
+def set_sr_config_file(rpc, pg_major_int_version, repl_user, repl_pass, up_db_repl_ip, up_db_port, repl_app_name, pgdata, recovery_min_apply_delay=None, recovery_target_timeline=True):
 
     """
     设置备库配置文件以满足流复制的需要
@@ -515,14 +515,16 @@ def set_sr_config_file(rpc, pg_major_int_version, repl_user, repl_pass, up_db_re
         new_primary_conninfo_str = err_msg if err_msg else new_primary_conninfo_str
 
     modify_item_dict = {
-        "recovery_target_timeline": "'latest'",
         "primary_conninfo": new_primary_conninfo_str
     }
     if recovery_min_apply_delay:
         modify_item_dict['recovery_min_apply_delay'] = recovery_min_apply_delay
+    if recovery_target_timeline:
+        modify_item_dict['recovery_target_timeline'] = "'latest'"
 
     if pg_major_int_version < 12:
         modify_item_dict['standby_mode'] = "'on'"
+        modify_item_dict['recovery_target_timeline'] = "'latest'"
 
     rpc.modify_config_type1(config_file, modify_item_dict, deli_type=1, is_backup=False)
 
@@ -544,6 +546,9 @@ def set_sr_config_file(rpc, pg_major_int_version, repl_user, repl_pass, up_db_re
         if err_code != 0:
             err_msg = f"can not set {var_file} owner to {upw_dict['pw_uid']}: {err_msg}"
             return err_code, err_msg
+
+    if not recovery_target_timeline and pg_major_int_version > 12:
+        return 0, "Not restart"
     return 0, ''
 
 
@@ -790,10 +795,14 @@ def pg_change_standby_updb(rpc, pgdata, repl_user, repl_pass, repl_app_name, up_
         return err_code, version
 
     pg_major_int_version = int(str(version).split('.')[0])
-    err_code, err_msg = set_sr_config_file(rpc, pg_major_int_version, repl_user, repl_pass, up_db_host, up_db_port, repl_app_name, pgdata)
+    err_code, err_msg = set_sr_config_file(rpc, pg_major_int_version, repl_user, repl_pass, up_db_host, up_db_port, repl_app_name, pgdata, recovery_target_timeline=False)
     if err_code != 0:
         return err_code, err_msg
-    err_code, err_msg = restart(rpc, pgdata)
+
+    if err_msg == "Not restart":
+        err_code, err_msg = reload(rpc, pgdata)
+    else:
+        err_code, err_msg = restart(rpc, pgdata)
     return 0, ''
 
 

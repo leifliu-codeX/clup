@@ -609,7 +609,7 @@ def switch_over_db(old_pri_db, new_pri_db, task_id, pre_msg):
 
         # 修改数据库配配置：把新主库的上级库设置为NULL,is_primary设置为1
         dao.update_up_db_id('NULL', new_pri_db['db_id'], 1)
-        # 修改数据库配配置：把旧主库的上级库设置新主库,is_primary设置为1
+        # 修改数据库配配置：把旧主库的上级库设置新主库,is_primary设置为0
         dao.update_up_db_id(new_pri_db['db_id'], old_pri_db['db_id'], 0)
 
         # 把选中的这个新主库（目前处于备库状态）激活成主库
@@ -620,6 +620,14 @@ def switch_over_db(old_pri_db, new_pri_db, task_id, pre_msg):
             task_log_error(task_id, f"{pre_msg}: {err_msg}")
             return err_code, err_msg
         task_log_info(task_id, f'{pre_msg}: promote new primary completed.')
+
+        task_log_info(task_id, f"{pre_msg}: start old primary database ...")
+        err_code, err_msg = pg_db_lib.start(old_pri_db["host"], old_pri_db["pgdata"])
+        if err_code < 0:
+            err_msg = f"start the old primary database failed, {err_msg}."
+            task_log_error(task_id, err_msg)
+            return -1, err_msg
+        task_log_info(task_id, f"{pre_msg}: start old primary database completed.")
         return 0, ''
     except Exception:
         err_msg = f"unexpect error occurred: {traceback.format_exc()}"
@@ -1525,7 +1533,7 @@ def get_current_cluster_room(cluster_id) -> Tuple[int, str, dict]:
 
 def get_db_relation_info(db_dict):
     for db in db_dict['children']:
-        err_code, err_code, room = get_db_room(db['db_id'])
+        err_code, _err_code, room = get_db_room(db['db_id'])
         if err_code != 0:
             return
         db['room_name'] = room.get('room_name', '') if err_code == 0 else ''

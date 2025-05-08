@@ -2646,6 +2646,47 @@ def add_sr_cluster(req):
             # leifliu 修复数据库目录带末尾“/”时，导致检测数据库是否已存在时漏检
             if "/" == pgdata[-1]:
                 pgdata = pgdata[:-1]
+
+            # 查询数据库的repl_app_name
+            err_code, err_msg = rpc_utils.get_rpc_connect(db_ip)
+            if err_code != 0:
+                dbp.rollback()
+                return 400, f"Connect host({db_ip}) failed, {err_msg}"
+            rpc = err_msg
+            repl_app_name = ""
+            item_dict = {}
+            config_file = f"{pgdata}/postgresql.conf"
+            if rpc.os_path_exists(config_file):
+                err_code, err_msg = rpc.read_config_file_items(config_file, ["primary_conninfo", "cluster_name"])
+                if err_code == 0:
+                    item_dict.update(err_msg)
+
+            recovery_file = f"{pgdata}/recovery.conf"
+            if rpc.os_path_exists(recovery_file):
+                err_code, err_msg = rpc.read_config_file_items(recovery_file, ["primary_conninfo", "cluster_name"])
+                if err_code == 0:
+                    item_dict.update(err_msg)
+
+            # 读取postgresql.auto.conf
+            auto_conf_file = f"{pgdata}/postgresql.auto.conf"
+            if rpc.os_path_exists(auto_conf_file):
+                err_code, err_msg = rpc.read_config_file_items(auto_conf_file, ["primary_conninfo", "cluster_name"])
+                if err_code == 0:
+                    item_dict.update(err_msg)
+
+            rpc.close()
+            if item_dict.get("cluster_name"):
+                repl_app_name = item_dict.get("cluster_name")
+            if item_dict.get("primary_conninfo"):
+                primary_conninfo = item_dict.get("primary_conninfo")
+                if primary_conninfo[0] in {"'", '"'}:
+                    primary_conninfo = primary_conninfo[1:-1]
+                conninfo = primary_conninfo.split()
+                for k in conninfo:
+                    data = k.split("=")
+                    if len(data) == 2 and data[0] == "application_name":
+                        repl_app_name = data[1]
+
             # 检查host和端口是否存在
             sql = "SELECT cluster_id, db_id, port, is_primary FROM clup_db WHERE host=%s AND pgdata=%s"
             # 修复检测数据库是否已存在时存在漏检问题，原pdict["pgdata"]在多个数据库目录时错误
@@ -2658,6 +2699,12 @@ def add_sr_cluster(req):
                         f"The database ({db_ip}:{pdict['port']}) already in the cluster (cluster_id: {cluster_id})",
                     )
                 is_primary = rows[0]["is_primary"]
+                if is_primary and not repl_app_name:
+                    repl_app_name = db_ip
+
+                if not repl_app_name:
+                    dbp.rollback()
+                    return 400, f"Please configure application_name in the database(host={db_ip}) parameter primary_conninfo, or configure the parameter cluster_name."
 
                 if rows[0]["port"] != pdict["port"]:
                     dbp.rollback()
@@ -2666,11 +2713,12 @@ def add_sr_cluster(req):
                         400,
                         f"The database already exists in the data directory({pgdata}) of the host({db_ip}), the port({port}) is inconsistent with the cluster port({pdict['port']})!",
                     )
-                sql = """UPDATE clup_db SET state=1, cluster_id=%s,
+
+                sql = """UPDATE clup_db SET state=1, cluster_id=%s, repl_app_name=%s,
                     repl_ip = %s, db_detail = db_detail || %s::jsonb where host= %s AND port = %s
                 """
                 repl_info_str = json.dumps({"repl_user": pdict["repl_user"], "repl_pass": pdict["repl_pass"]})
-                dbp.execute(sql, (cluster_id, repl_ip, repl_info_str, db_ip, pdict["port"]))
+                dbp.execute(sql, (cluster_id, repl_app_name, repl_ip, repl_info_str, db_ip, pdict["port"]))
 
                 # check clup_used_vip, if exists update or insert
                 if is_primary:
@@ -2715,31 +2763,16 @@ def add_sr_cluster(req):
             else:
                 is_primary = 1
                 primary_num += 1
-
-            primary_conninfo = ""
-            cluster_name_value = ""
-            repl_app_name = ""
-            setting_sql = "SELECT name, setting FROM pg_settings WHERE name = 'cluster_name' OR name = 'primary_conninfo'"
-            setting_rows = dao.sql_query(conn, setting_sql)
-            conn.close()
-            for setting in setting_rows:
-                if setting["name"] == "primary_conninfo":
-                    primary_conninfo = setting["setting"]
-                elif setting["name"] == "cluster_name":
-                    cluster_name_value = setting["setting"]
-
-            if cluster_name_value:
-                repl_app_name = cluster_name_value
-            if primary_conninfo:
-                conninfo = primary_conninfo.split()
-                for k in conninfo:
-                    data = k.split("=")
-                    if len(data) == 2 and data[0] == "application_name":
-                        repl_app_name = data[1]
+                if not repl_app_name:
+                    repl_app_name = db_ip
 
             if not repl_app_name:
                 dbp.rollback()
-                return 400, f"Please configure application_name in the database(host={db_ip}) parameter primary_conninfo."
+                return 400, f"Please configure application_name in the database(host={db_ip}) parameter primary_conninfo, or configure the parameter cluster_name."
+
+            if primary_num > 1:
+                dbp.rollback()
+                return 400, "There are two or more primary databases in the cluster, please check before importing."
 
             db_insert_sql = (
                 "INSERT INTO clup_db(cluster_id, state, pgdata, "
@@ -2766,10 +2799,6 @@ def add_sr_cluster(req):
             ipList.append(db_ip)
             if db_rows:
                 cluster_db_id_list.append(db_id)
-
-            if primary_num > 1:
-                dbp.rollback()
-                return 400, "There are two or more primary databases in the cluster, please check before importing."
 
             # if is primary db,add used vip info
             if is_primary:

@@ -878,7 +878,10 @@ def sr_switch(task_id, cluster_id, db_id, primary_db, keep_cascaded=False):
                         continue
                     pg_helpers.alter_system_conf(db_dict['db_id'], "primary_conninfo", old_conninfo_dict[db['db_id']])
                     # 重启数据库
-                    pg_db_lib.restart(db['host'], db['pgdata'])
+                    if int(db["version"].split(".")[0]) < 13:
+                        pg_db_lib.restart(db['host'], db['pgdata'])
+                    else:
+                        pg_db_lib.reload(db['host'], db['pgdata'])
 
             if isinstance(e, UserWarning):
                 log_error(task_id, f"{pre_msg}: switch to {new_pri_db['host']} failed!!!")
@@ -984,6 +987,15 @@ def sr_switch(task_id, cluster_id, db_id, primary_db, keep_cascaded=False):
             dao.update_up_db_id('null', new_pri_db['db_id'], 1)
 
         log_info(task_id, f"{pre_msg}: change all standby database upper level primary database to new primary completed.")
+
+        log_info(task_id, f"{pre_msg}: start old primary database ...")
+        err_code, err_msg = pg_db_lib.start(old_pri_db["host"], old_pri_db["pgdata"])
+        if err_code < 0:
+            err_msg = f"start the old primary database failed, {err_msg}."
+            log_error(task_id, err_msg)
+            general_task_mgr.complete_task(task_id, -1, err_msg)
+            return -1, err_msg
+        log_info(task_id, f"{pre_msg}: start old primary database completed.")
 
         # 如果配置了切换时调用的数据库函数，则调用此函数
         trigger_db_name = cluster_dict['trigger_db_name']
@@ -1487,12 +1499,66 @@ def online_sr_cluster(cluster_dict):
         finally:
             rpc.close()
 
+    db_port = cluster_dict['port']
+
+    # 从第一个库中获得repl_user和repl_pass, cluster_data中的db_repl_user和db_repl_user废弃了
+    # ha_db_user = cluster_dict['ha_db_user']
+    # ha_db_pass = db_encrypt.from_db_text(cluster_dict['ha_db_pass'])
+    # db_repl_user = cluster_dict['db_repl_user']
+    db_user = clu_db_list[0]['db_user']
+    db_pass = db_encrypt.from_db_text(clu_db_list[0]['db_pass'])
+    repl_user = clu_db_list[0]['repl_user']
+
+    is_return = False
     # 检查集群数据库是否已启动
     for db in clu_db_list:
-        db_dict = dao.get_db_state(db["db_id"])
-        if db_dict['db_state'] != 0:
+        db_state_dict = dao.get_db_state(db["db_id"])
+        if db_state_dict['db_state'] != 0:
             err_result.append(f"Please check if the database(id={db['db_id']}) host=({db['host']}) is already started.")
-            return err_result
+            is_return = True
+            continue
+        #     return err_result
+        if db_state_dict["state"] != 1:
+            err_result.append(f"Please check if the database(id={db['db_id']}) host=({db['host']}) ha state is Normal.")
+            is_return = True
+            continue
+
+        main_version = int(db["version"].split(".")[0])
+        pgdata = db["pgdata"]
+        # 检查数据库参数recovery_target_timeline是否为latest
+        err_code, err_msg = rpc_utils.get_rpc_connect(db["host"])
+        if err_code != 0:
+            err_result.append(f"Connect the host({db['host']}) failed.")
+            is_return = True
+            continue
+        rpc = err_msg
+        item_dict = {}
+        if main_version < 12:
+            if db["is_primary"]:
+                rpc.close()
+                continue
+            recovery_file = f"{pgdata}/recovery.conf"
+            if rpc.os_path_exists(recovery_file):
+                err_code, item_dict = rpc.read_config_file_items(recovery_file, ["recovery_target_timeline"])
+            if err_code != 0:
+                item_dict = {}
+        else:
+            # 先读取postgresql.auto.conf
+            auto_conf_file = f"{pgdata}/postgresql.auto.conf"
+            err_code, item_dict = rpc.read_config_file_items(auto_conf_file, ["recovery_target_timeline"])
+            if err_code == 0 and item_dict.get("recovery_target_timeline"):
+                pass
+            else:
+                config_file = f"{pgdata}/postgresql.conf"
+                err_code, item_dict = rpc.read_config_file_items(config_file, ["recovery_target_timeline"])
+
+        rpc.close()
+        if not item_dict or item_dict.get("recovery_target_timeline") != "'latest'":
+            err_result.append(f"Please set the parameter recovery_target_timeline for the database(id={db['db_id']}) host=({db['host']}) to 'latest'.")
+            is_return = True
+
+    if is_return:
+        return err_result
 
     # 开始检查主备库之间的流复制
     logging.info(f"{pre_msg}: Start checking if replication is functioning properly...")
@@ -1505,16 +1571,6 @@ def online_sr_cluster(cluster_dict):
         logging.info(f"{pre_msg}: No primary in the streaming replication!")
         err_result.append(["There is no primary configured in the database.", "Please check the configuration of the database in the cluster"])
         return err_result
-
-    db_port = cluster_dict['port']
-
-    # 从第一个库中获得repl_user和repl_pass, cluster_data中的db_repl_user和db_repl_user废弃了
-    # ha_db_user = cluster_dict['ha_db_user']
-    # ha_db_pass = db_encrypt.from_db_text(cluster_dict['ha_db_pass'])
-    # db_repl_user = cluster_dict['db_repl_user']
-    db_user = clu_db_list[0]['db_user']
-    db_pass = db_encrypt.from_db_text(clu_db_list[0]['db_pass'])
-    repl_user = clu_db_list[0]['repl_user']
 
     sql = " SELECT db_id, host, port " \
         "FROM clup_db ,(SELECT up_db_id FROM clup_db WHERE cluster_id=%s) AS t " \
